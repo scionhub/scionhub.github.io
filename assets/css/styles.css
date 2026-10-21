@@ -73,26 +73,25 @@ ul { padding-left: 1.2rem; }
   background: #000; color: #fff; padding: .5rem .75rem; z-index: 1000;
 }
 .skip-link:focus { left: .5rem; top: .5rem; }
-/* Header */
+/* Header (GitHub-like dark header) */
 .site-header {
   position: sticky; top: 0; z-index: 200;
-  background: color-mix(in oklab, var(--panel) 85%, transparent);
-  backdrop-filter: blur(10px);
-  border-bottom: 1px solid var(--border);
+  background: #0d1117;
+  border-bottom: 1px solid #30363d;
 }
 .site-header.small { position: static; }
 .header-inner {
   display: flex; align-items: center; justify-content: space-between;
   padding: .75rem 0;
 }
-.brand { display: inline-flex; gap: .5rem; align-items: center; color: var(--text); text-decoration: none; }
+.brand { display: inline-flex; gap: .5rem; align-items: center; color: #c9d1d9; text-decoration: none; }
 .brand-name { font-weight: 700; letter-spacing: .2px; }
 .site-nav ul {
   display: flex; gap: .5rem; align-items: center;
   list-style: none; margin: 0; padding: 0;
 }
-.site-nav a { padding: .5rem .75rem; border-radius: .5rem; }
-.site-nav a:hover { background: color-mix(in oklab, var(--chip) 70%, transparent); text-decoration: none; }
+.site-nav a { padding: .5rem .75rem; border-radius: .5rem; color: #c9d1d9; }
+.site-nav a:hover { background: #21262d; text-decoration: none; }
 .nav-toggle {
   display: none; background: transparent; border: 0; cursor: pointer;
 }
@@ -128,6 +127,17 @@ ul { padding-left: 1.2rem; }
   color: #07221b; border: 0;
 }
 .btn-lg { padding: .7rem 1.1rem; font-size: 1.05rem; }
+/* Subnav / page head (GitHub-like) */
+.page-head {
+  border-bottom: 1px solid #30363d;
+  background: #0d1117;
+  padding: 1rem 0;
+}
+.subnav {
+  display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
+}
+.subnav .btn { background: #21262d; border-color: #30363d; color: #c9d1d9; }
+.subnav .btn:hover { background: #30363d; }
 /* Hero */
 .hero {
   padding: 4.5rem 0 3.5rem;
@@ -212,7 +222,7 @@ ul { padding-left: 1.2rem; }
 .summary dt { color: var(--muted); }
 .summary dd { margin: 0; }
 /* Footer */
-.site-footer { padding: 2rem 0 3rem; border-top: 1px solid var(--border); background: color-mix(in oklab, var(--panel) 85%, transparent); }
+.site-footer { padding: 2rem 0 3rem; border-top: 1px solid #30363d; background: #0d1117; }
 .footer-inner { display: grid; grid-template-columns: 1fr auto auto; gap: 1rem; align-items: start; }
 .footer-links { list-style: none; padding: 0; margin: 0; display: grid; gap: .35rem; }
 .legal { text-align: center; color: var(--muted); margin-top: 1.2rem; }
@@ -223,4 +233,31 @@ ul { padding-left: 1.2rem; }
 /* Accessibility helpers */
 .btn:focus, a:focus, input:focus, button:focus { outline: 3px solid color-mix(in oklab, var(--accent) 55%, white 25%); outline-offset: 2px; }
 .disclaimer { color: color-mix(in oklab, var(--muted) 85%, #ffefc0 15%); background: color-mix(in oklab, var(--warn) 15%, transparent); border-left: 3px solid var(--warn); padding: .6rem .75rem; border-radius: .4rem; }
+
+/* GitHub-like layout and orgs */
+.page { padding: 1rem 0 3rem; }
+.layout-2col { display: grid; grid-template-columns: 260px 1fr; gap: 1.2rem; }
+@media (max-width: 900px) { .layout-2col { grid-template-columns: 1fr; } }
+.sidebar { position: relative; }
+.sidebar .card { position: sticky; top: 5rem; }
+.content { min-width: 0; }
+.org-list { display: grid; gap: .8rem; }
+.org-card {
+  display: grid; grid-template-columns: 48px 1fr auto; gap: .8rem; align-items: center;
+  background: var(--panel); border: 1px solid var(--border); border-radius: .6rem; padding: .6rem .8rem;
+}
+.org-avatar {
+  width: 48px; height: 48px; border-radius: 50%; display: grid; place-items: center;
+  background: #1f6feb; color: white; font-weight: 800; letter-spacing: .3px;
+}
+.org-meta h3 { margin: 0; }
+.org-meta .muted { color: var(--muted); font-size: .9rem; }
+.org-actions .btn { padding: .35rem .6rem; }
+.repo-list { list-style: none; padding: 0; margin: 0; display: grid; gap: .6rem; }
+.repo-item {
+  display: grid; grid-template-columns: 1fr auto; align-items: center;
+  background: var(--panel); border: 1px solid var(--border); border-radius: .6rem; padding: .6rem .8rem;
+}
+.repo-item .badge { font-size: .75rem; }
+
 
