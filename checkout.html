@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Get started — ScionHub (POC checkout)</title>
+    <meta name="description" content="Proof-of-concept checkout for ScionHub. No real payment is taken. Contact FilOz if interested." />
+    <link rel="icon" href="./assets/images/favicon.svg" />
+    <link rel="stylesheet" href="./assets/css/styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header small" role="banner">
+      <div class="container header-inner">
+        <a class="brand" href="./" aria-label="ScionHub home">
+          <img src="./assets/images/logo.svg" width="24" height="24" alt="" />
+          <span class="brand-name">ScionHub</span>
+        </a>
+        <nav class="site-nav" aria-label="Primary">
+          <ul>
+            <li><a href="./#pricing">Pricing</a></li>
+            <li><a class="btn btn-ghost" href="https://github.com/scionhub/openscion" target="_blank" rel="noopener">OpenScion</a></li>
+          </ul>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main" class="section">
+      <div class="container narrow">
+        <h1>Get started</h1>
+        <p class="disclaimer">
+          This is a <strong>proof of concept</strong>. <strong>No real payment is taken</strong>.
+          If you are interested in pilots or production usage, please contact
+          <a href="https://filoz.org" target="_blank" rel="noopener">FilOz</a>.
+        </p>
+
+        <form id="checkout-form" class="card form" aria-describedby="poc-note">
+          <fieldset>
+            <legend class="sr-only">Account details</legend>
+            <label for="email">Work email</label>
+            <input id="email" name="email" type="email" inputmode="email" autocomplete="email" required placeholder="you@company.org" />
+
+            <label for="org-name">Organization name</label>
+            <input id="org-name" name="orgName" type="text" required placeholder="Filecoin Project" />
+
+            <label for="org-handle">Organization handle</label>
+            <div class="input-with-prefix">
+              <span aria-hidden="true">@</span>
+              <input id="org-handle" name="orgHandle" type="text" required pattern="[a-z0-9\\-]{2,}" placeholder="filecoin-project" aria-describedby="handle-help" />
+            </div>
+            <small id="handle-help">Lowercase letters, numbers, and dashes only.</small>
+          </fieldset>
+
+          <fieldset>
+            <legend>Usage estimate</legend>
+            <label for="storage-gb">Estimated monthly storage (GB)</label>
+            <input id="storage-gb" name="storageGb" type="number" min="0" step="0.1" inputmode="decimal" placeholder="1.0" />
+
+            <label>Preferred currency</label>
+            <div class="choices">
+              <label class="choice">
+                <input type="radio" name="currency" value="USD" checked />
+                <span>USD</span>
+              </label>
+              <label class="choice">
+                <input type="radio" name="currency" value="ETH" />
+                <span>ETH</span>
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>POC Terms</legend>
+            <label class="choice">
+              <input id="accept-poc" type="checkbox" required />
+              <span>I understand this is a proof of concept and no real payment will be taken.</span>
+            </label>
+          </fieldset>
+
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary btn-lg">Create org</button>
+            <a class="btn btn-ghost" href="./">Cancel</a>
+          </div>
+          <p id="poc-note" class="tiny-note">
+            Free for the first 6 months or first 1 GB, whichever comes first; then $5/GB/month. Billed in USD or ETH.
+          </p>
+        </form>
+
+        <section id="confirmation" class="card confirmation hidden" role="status" aria-live="polite">
+          <h2>You're in! 🎉</h2>
+          <p>
+            We recorded your interest. Since this is a POC, <strong>no payment was taken</strong>.
+            We'll reach out at the email you provided after review.
+          </p>
+          <div class="summary">
+            <dl>
+              <div>
+                <dt>Org</dt>
+                <dd id="summary-org"></dd>
+              </div>
+              <div>
+                <dt>Email</dt>
+                <dd id="summary-email"></dd>
+              </div>
+              <div>
+                <dt>Est. storage</dt>
+                <dd id="summary-storage"></dd>
+              </div>
+              <div>
+                <dt>Currency</dt>
+                <dd id="summary-currency"></dd>
+              </div>
+              <div>
+                <dt>Reference</dt>
+                <dd id="summary-ref"></dd>
+              </div>
+            </dl>
+          </div>
+          <div class="form-actions">
+            <a class="btn btn-primary" href="./">Back to home</a>
+            <a class="btn btn-ghost" href="https://filoz.org" target="_blank" rel="noopener">Contact FilOz</a>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container legal">
+        <small>© <span id="year"></span> ScionHub — Proof of Concept</small>
+      </div>
+    </footer>
+
+    <script src="./assets/js/main.js" defer></script>
+    <script>
+      // Minimal inline to wire the confirmation UX without external deps
+      document.addEventListener('DOMContentLoaded', () => {
+        const form = document.getElementById('checkout-form');
+        const confirm = document.getElementById('confirmation');
+        if (!form || !confirm) return;
+        form.addEventListener('submit', (e) => {
+          e.preventDefault();
+          const data = new FormData(form);
+          const email = String(data.get('email') || '').trim();
+          const orgName = String(data.get('orgName') || '').trim();
+          const orgHandle = String(data.get('orgHandle') || '').trim();
+          const storageGb = String(data.get('storageGb') || '').trim() || '—';
+          const currency = String(data.get('currency') || 'USD');
+          // Fake reference id for demo
+          const ref = 'poc_' + Math.random().toString(36).slice(2, 8);
+          // Persist locally so reloads preserve the summary during demos
+          try {
+            localStorage.setItem('scionhub_checkout', JSON.stringify({ email, orgName, orgHandle, storageGb, currency, ref }));
+          } catch {}
+          const $ = (id) => document.getElementById(id);
+          $('summary-org').textContent = `${orgName} (@${orgHandle})`;
+          $('summary-email').textContent = email;
+          $('summary-storage').textContent = `${storageGb} GB / mo (est.)`;
+          $('summary-currency').textContent = currency;
+          $('summary-ref').textContent = ref;
+          confirm.classList.remove('hidden');
+          form.classList.add('hidden');
+          confirm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+        const saved = localStorage.getItem('scionhub_checkout');
+        if (saved) {
+          try {
+            const obj = JSON.parse(saved);
+            if (obj && obj.email) {
+              document.getElementById('email').value = obj.email || '';
+              document.getElementById('org-name').value = obj.orgName || '';
+              document.getElementById('org-handle').value = obj.orgHandle || '';
+              document.getElementById('storage-gb').value = obj.storageGb || '';
+            }
+          } catch {}
+        }
+      });
+    </script>
+  </body>
+  </html>
+
