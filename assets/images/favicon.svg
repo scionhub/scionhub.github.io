@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 64 64" role="img" aria-label="ScionHub icon">
+  <defs>
+    <linearGradient id="f" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#27c79f"/>
+      <stop offset="1" stop-color="#0b8b6f"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="#0f1416"/>
+  <path d="M18 26c0-3 3.1-5.6 7-5.9 3.6-.3 6.3.7 8.8 2.6l2.5-2.4c-3.1-2.4-6.8-3.7-11.6-3.3C18.9 17.3 15 21.5 15 26.2c0 4 2.8 6.7 6.7 8l7.9 2.4c2 .6 3.1 1.6 3.1 3.1 0 2-2.2 3.6-4.9 3.8-3.1.2-5.8-.7-8.2-2.5l-2.5 2.4c3.2 2.4 6.7 3.6 11.1 3.3 5.5-.4 9.6-3.6 9.6-7.7 0-3.6-2.3-6.1-6.5-7.3l-7.9-2.4C19.6 29.6 18 28.2 18 26z" fill="url(#f)"/>
+</svg>
+
