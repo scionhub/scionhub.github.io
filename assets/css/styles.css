@@ -260,4 +260,33 @@ ul { padding-left: 1.2rem; }
 }
 .repo-item .badge { font-size: .75rem; }
 
+/* Download CLI */
+.download-hero {
+  padding: 2rem 0 1rem;
+  border-bottom: 1px solid #30363d;
+  background: #0d1117;
+}
+.download-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+@media (max-width: 860px) { .download-grid { grid-template-columns: 1fr; } }
+.download-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: .8rem;
+  padding: 1rem;
+  box-shadow: 0 8px 16px var(--shadow);
+}
+.download-card h3 { margin: 0 0 .25rem; }
+.download-card .muted { color: var(--muted); margin-bottom: .75rem; }
+.download-card .btn { margin-top: .35rem; }
+.download-card.recommended {
+  border-color: color-mix(in oklab, var(--accent), var(--border) 20%);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 15%, transparent), 0 8px 16px var(--shadow);
+}
+.recommend-badge { margin-left: .5rem; background: #238636; color: #e6ffed; border-color: #2ea043; }
+.downloads-footer { margin-top: 1rem; color: var(--muted); }
+
 
