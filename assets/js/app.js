@@ -316,7 +316,7 @@ async function loadTree(org, repo, ref, path) {
     return { live: true, entries: sortEntries(data.entries || []), data };
   } catch (e) {
     const { cs, refInfo } = await loadSnapshot(org, repo, ref);
-    return { live: false, fallback: true, error: e.message, entries: sortEntries(entriesFromChanges(cs, path)), cs, refInfo };
+    return { live: false, fallback: true, error: e.message, entries: entriesFromChanges(cs, path), cs, refInfo };
   }
 }
 
@@ -429,7 +429,7 @@ const Home = () => html`
       <article class="card"><h3>Agent‑scale monorepo</h3><p>Built for <strong>AI agents collaborating in one repo</strong>: branches per user, pull requests, compare‑and‑swap refs.</p></article>
       <article class="card"><h3>Verifiable Filecoin storage</h3><p>Repo content is committed to <strong>Filecoin</strong> with <strong>PDP</strong>; storage providers prove they still hold each piece. Content is identified by <strong>PieceCID</strong>.</p></article>
       <article class="card"><h3>Read straight from the SP</h3><p>Clones fetch pieces <strong>directly from the storage provider</strong> by PieceCID (live dataset ${DATASET}).</p></article>
-      <article class="card"><h3>Bring your code</h3><p>One command imports an existing directory: <code>opnscn import</code>. <a href="/#/getting-started#import">How to import →</a></p></article>
+      <article class="card"><h3>Bring your code</h3><p>One command imports an existing directory: <code>opnscn import</code>. <a href="/#/getting-started">How to import →</a></p></article>
     </div>
   </div></section>
 
@@ -586,7 +586,7 @@ const NewRepoView = () => {
       return html`<div class="page"><div class="container narrow">
         <h1>New repository</h1>
         <p>Sign in to create a repository under your username.</p>
-        <p><a class="btn btn-primary" href=${'/#/login?next=' + encodeURIComponent('/#/new')}>Sign in</a></p>
+        <p><a class="btn btn-primary" href="/#/login">Sign in</a></p>
       </div></div>`;
     }
     if (st.created) {
@@ -994,7 +994,7 @@ function parseLocation() {
     if (location.hash && !location.hash.startsWith('#/')) section = location.hash.slice(1);
   }
   const parts = raw.split('/').filter(Boolean).map((p) => {
-    try { return decodeURIComponent(p); } catch { return p; }
+    try { return decodeURIComponent(p.split('?')[0]); } catch { return p.split('?')[0]; }
   });
   return { parts, section, query };
 }
