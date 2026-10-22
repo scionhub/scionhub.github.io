@@ -1,43 +1,13 @@
-# ScionHub — Static site (POC)
+# ScionBase — website (POC)
 
-This repository contains a responsive, accessible, static marketing site for ScionHub:
+Static single-page site for **ScionBase**: git-like code hosting with repository content stored on
+Filecoin via PDP (Proof of Data Possession), addressed by PieceCID and read directly from storage providers.
 
-- Hosted OpenScion; repo content stored on Filecoin via PDP, addressed by PieceCID, read directly from the SP
-- Verifiable storage on Filecoin via the PDP API (Synapse SDK), identified by PieceCID
-- GitHub-like multi-tenant model (first org: `filecoin-project`)
-- Proof of concept — claims are intentionally conservative
-
-## Local development
-
-No build step is required; serve the static files with any HTTP server.
-
-Using Python 3:
-
-```bash
-python3 -m http.server 8080
-```
-
-Then open `http://localhost:8080`.
-
-Entry points:
-- `index.html` — landing page (benefits, architecture, pricing)
+- `index.html` / `404.html` — identical SPA shell (404.html makes deep links work on GitHub Pages)
+- `assets/js/app.js` — lit-html app: home, orgs, org, repo (tree/blob/PRs/sync), sign in, new repo, CLI guide
+- `assets/js/config.js` — API base URL
 - `checkout.html` — POC checkout (no real payment)
 
-## Pricing
+Run locally: `python3 -m http.server 8080` and open `http://localhost:8080/#/`.
 
-- Free for the first 6 months or first 1 GB, whichever comes first
-- Then $5/GB/month, payable in USD or ETH
-- The provided checkout flow is a POC — no real payment is taken
-
-If you are interested in pilots or production usage, contact FilOz:
-
-- Website: https://filoz.org
-
-## Deploying with GitHub Pages
-
-This repo includes a minimal Pages workflow (`.github/workflows/pages.yml`) that publishes the static site.
-Enable Pages on the repository and set the source to GitHub Actions.
-
-## License
-
-Unless otherwise noted, content in this repository is provided under the MIT License.
+Pricing (POC): free for the first 6 months or 1 GB, then $5/GB/month (USD or ETH). Contact: https://filoz.org

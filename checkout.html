@@ -3,8 +3,8 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Get started — ScionHub (POC checkout)</title>
-    <meta name="description" content="Proof-of-concept checkout for ScionHub. No real payment is taken. Contact FilOz if interested." />
+    <title>Get started — ScionBase (POC checkout)</title>
+    <meta name="description" content="Proof-of-concept checkout for ScionBase. No real payment is taken. Contact FilOz if interested." />
     <link rel="icon" href="./assets/images/favicon.svg" />
     <link rel="stylesheet" href="./assets/css/styles.css" />
   </head>
@@ -12,17 +12,17 @@
     <a class="skip-link" href="#main">Skip to content</a>
     <header class="site-header small" role="banner">
       <div class="container header-inner">
-        <a class="brand" href="./" aria-label="ScionHub home">
+        <a class="brand" href="./" aria-label="ScionBase home">
           <img src="./assets/images/logo.svg" width="24" height="24" alt="" />
-          <span class="brand-name">ScionHub</span>
+          <span class="brand-name">ScionBase</span>
         </a>
         <nav class="site-nav" aria-label="Primary">
           <ul>
-            <li><a href="/#/filecoin-project">Organizations</a></li>
+            <li><a href="/#/orgs">Orgs</a></li>
             <li><a href="/#/getting-started">Getting Started</a></li>
-            <li><a href="./cli.html">Download CLI</a></li>
+            <li><a href="/#download">Download CLI</a></li>
             <li><a href="./#pricing">Pricing</a></li>
-            <li><a class="btn btn-ghost" href="https://github.com/scionhub/openscion" target="_blank" rel="noopener">OpenScion</a></li>
+            
           </ul>
         </nav>
       </div>
@@ -129,7 +129,7 @@
 
     <footer class="site-footer">
       <div class="container legal">
-        <small>© <span id="year"></span> ScionHub — Proof of Concept</small>
+        <small>© <span id="year"></span> ScionBase — Proof of Concept</small>
       </div>
     </footer>
 
@@ -153,7 +153,7 @@
           const ref = 'poc_' + Math.random().toString(36).slice(2, 8);
           // Persist locally so reloads preserve the summary during demos
           try {
-            localStorage.setItem('scionhub_checkout', JSON.stringify({ email, orgName, orgHandle, storageGb, currency, ref }));
+            localStorage.setItem('scionbase_checkout', JSON.stringify({ email, orgName, orgHandle, storageGb, currency, ref }));
           } catch {}
           const $ = (id) => document.getElementById(id);
           $('summary-org').textContent = `${orgName} (@${orgHandle})`;
@@ -165,7 +165,7 @@
           form.classList.add('hidden');
           confirm.scrollIntoView({ behavior: 'smooth', block: 'start' });
         });
-        const saved = localStorage.getItem('scionhub_checkout');
+        const saved = localStorage.getItem('scionbase_checkout');
         if (saved) {
           try {
             const obj = JSON.parse(saved);

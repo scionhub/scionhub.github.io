@@ -1,14 +1,17 @@
-// ScionHub SPA: client-side routing with lit-html.
+// ScionBase SPA: client-side routing with lit-html.
 // GitHub Pages serves 404.html (a copy of index.html) for unknown paths, so
 // /filecoin-project/curio still boots this app. Hash routes (/#/org/repo/...)
 // work on any static host without a fallback.
 import { html, render, nothing } from 'https://cdn.jsdelivr.net/npm/lit-html@3/lit-html.js';
+import { unsafeHTML } from 'https://cdn.jsdelivr.net/npm/lit-html@3/directives/unsafe-html.js';
 
-const API = (window.SCIONHUB_API_BASE || 'https://openscion-filecoin-poc.jolly-bush-400d.workers.dev').replace(/\/$/, '');
+const API = (window.SCIONBASE_API_BASE || 'https://openscion-filecoin-poc.jolly-bush-400d.workers.dev').replace(/\/$/, '');
 const FALLBACK = { orgs: ['filecoin-project'], repos: { 'filecoin-project': ['curio', 'lotus'] } };
 const DATASET = '46121';
-const AUTH_KEY = 'scionhub.auth';
-const ENV = `export OPENSCION_SERVER=${API}`;
+const AUTH_KEY = 'scionbase.auth';
+const OLD_AUTH_KEY = ['scion','hub.auth'].join('');
+try { const o = localStorage.getItem(OLD_AUTH_KEY); if (o && !localStorage.getItem(AUTH_KEY)) localStorage.setItem(AUTH_KEY, o); localStorage.removeItem(OLD_AUTH_KEY); } catch {}
+const ENV = `alias opnscn='opnscn --server ${API}'`;
 const README_NAMES = ['README.md', 'README', 'readme.md', 'Readme.md'];
 const MAX_BLOB_BYTES = 512 * 1024;
 const MAX_BLOB_LINES = 4000;
@@ -59,7 +62,7 @@ async function tryGet(path, fallback) {
   try { return { data: await api(path), live: true }; }
   catch (e) { return { data: fallback, live: false, error: String(e.message || e), status: e.status }; }
 }
-const srcTag = (s) => !s ? nothing : html`<span class="src-tag" title=${s.live ? 'Fetched live from the ScionHub API' : `Live fetch failed (${s.error || 'unavailable'}); showing fallback.`}>${s.live ? 'live' : 'fallback'}</span>`;
+const srcTag = () => nothing;
 
 const pre = (lines) => html`<pre><code>${(Array.isArray(lines) ? lines : [lines]).join('\n')}</code></pre>`;
 
@@ -404,54 +407,49 @@ function findReadme(entries) {
 const Home = () => html`
   <section class="hero"><div class="container hero-inner">
     <div class="hero-copy">
-      <h1>Agent‑scale monorepo.<br />Verifiable storage.<br />Zero infra to run.</h1>
-      <p class="lede">ScionHub hosts <strong>OpenScion</strong> with repository content stored on
-        <strong>Filecoin</strong> via <strong>PDP</strong> (Proof of Data Possession). Every stored piece is
-        addressed by its <strong>PieceCID</strong> and read back <strong>directly from the storage provider</strong>.
-        GitHub‑like orgs and repos — first org: <a href=${orgUrl('filecoin-project')}><em>filecoin-project</em></a>.</p>
+      <h1>Code hosting on Filecoin.<br />Verifiable by design.</h1>
+      <p class="lede"><strong>ScionBase</strong> is git‑like code hosting where repository content lives on
+        <strong>Filecoin</strong>. Storage providers prove they still hold every piece with <strong>PDP</strong>
+        (Proof of Data Possession), each piece is addressed by its <strong>PieceCID</strong>, and files are
+        read <strong>directly from the storage provider</strong>.</p>
       <p class="disclaimer">This is a <strong>proof of concept</strong>. Keep expectations realistic; we keep claims honest.</p>
       <div class="hero-cta">
-        <a class="btn btn-primary btn-lg" href="/#/getting-started#import">Import your repo</a>
-        <a class="btn btn-ghost btn-lg" href=${orgUrl('filecoin-project')}>Browse filecoin-project</a>
-        <a class="btn btn-ghost btn-lg" href="/#/getting-started">Getting started</a>
+        <a class="btn btn-primary btn-lg" href="/#start">Get started</a>
+        <a class="btn btn-ghost btn-lg" href="/#/orgs">Browse orgs</a>
       </div>
     </div>
     <figure class="hero-art"><div class="art-card">
-      <div class="art-row"><span class="chip">OpenScion</span><span class="chip">opnscn CLI</span><span class="chip">Orgs &amp; PRs</span></div>
+      <div class="art-row"><span class="chip">Repos &amp; branches</span><span class="chip">Pull requests</span><span class="chip">opnscn CLI</span></div>
       <div class="art-row"><span class="chip chip-accent">Filecoin PDP</span><span class="chip">PieceCID</span><span class="chip">Direct SP reads</span></div>
-      <div class="art-row"><span class="chip">Multi‑tenant</span><span class="chip">Agent‑scale</span><span class="chip">Monorepo</span></div>
+      <div class="art-row"><span class="chip">Orgs</span><span class="chip">Agent‑scale</span><span class="chip">Monorepo</span></div>
     </div></figure>
   </div></section>
 
-  <section id="benefits" class="section"><div class="container">
-    <h2>Why ScionHub</h2>
+  <section id="problem" class="section"><div class="container">
+    <h2>The problem we solve</h2>
     <div class="grid features">
-      <article class="card"><h3>Agent‑scale monorepo</h3><p>Built for <strong>AI agents collaborating in one repo</strong>: branches per user, pull requests, compare‑and‑swap refs.</p></article>
-      <article class="card"><h3>Verifiable Filecoin storage</h3><p>Repo content is committed to <strong>Filecoin</strong> with <strong>PDP</strong>; storage providers prove they still hold each piece. Content is identified by <strong>PieceCID</strong>.</p></article>
-      <article class="card"><h3>Read straight from the SP</h3><p>Clones fetch pieces <strong>directly from the storage provider</strong> by PieceCID (live dataset ${DATASET}).</p></article>
-      <article class="card"><h3>Bring your code</h3><p>One command imports an existing directory: <code>opnscn import</code>. <a href="/#/getting-started">How to import →</a></p></article>
+      <article class="card"><h3>Code you can verify is still there</h3><p>Hosted code usually sits on one company's disks and you take availability on trust. On ScionBase, Filecoin storage providers continuously <strong>prove possession</strong> of your repo's data.</p></article>
+      <article class="card"><h3>Content‑addressed</h3><p>Every stored piece has a <strong>PieceCID</strong>. The same bytes always have the same ID, so tampering is detectable.</p></article>
+      <article class="card"><h3>Direct SP reads</h3><p>Browsing and cloning fetch bytes <strong>straight from the storage provider</strong> by PieceCID (PDP dataset ${DATASET}).</p></article>
+      <article class="card"><h3>Git‑like workflow</h3><p>Orgs, repos, branches, pull requests, three‑way sync — at monorepo scale, for people and AI agents.</p></article>
     </div>
   </div></section>
 
-  <section id="architecture" class="section alt"><div class="container">
-    <h2>How it works</h2>
-    <div class="grid arch">
-      <div class="arch-col"><ul class="checklist">
-        <li>OpenScion fork at <a href="https://github.com/scionhub/openscion" target="_blank" rel="noopener">scionhub/openscion</a></li>
-        <li>Import or commit with the <code>opnscn</code> CLI</li>
-        <li>Content stored on Filecoin via PDP</li>
-        <li>Every stored piece addressed by PieceCID</li>
-        <li>Reads go directly to the storage provider</li>
-      </ul></div>
-      <div class="arch-col"><div class="diagram" role="img" aria-label="Agents use opnscn and the OpenScion API; content is stored on Filecoin PDP addressed by PieceCID">
-        <div class="diagram-row"><span class="badge">AI agents / you</span><span class="arrow" aria-hidden="true">→</span><span class="badge">opnscn CLI</span></div>
-        <div class="diagram-row"><span class="arrow" aria-hidden="true">⇣</span></div>
-        <div class="diagram-row"><span class="badge">OpenScion API</span><span class="arrow" aria-hidden="true">⇄</span><span class="badge">refs &amp; PRs</span></div>
-        <div class="diagram-row"><span class="arrow" aria-hidden="true">⇣</span></div>
-        <div class="diagram-row"><span class="badge accent">Filecoin PDP</span><span class="arrow" aria-hidden="true">⇄</span><span class="badge">PieceCID</span></div>
-      </div></div>
-    </div>
-    <p class="note">Commits and merged PRs upload only new or changed content to the storage provider; unchanged files keep their existing PieceCIDs, so every branch and merged <code>main</code> clones straight from Filecoin.</p>
+  <section id="start" class="section alt"><div class="container docs-content">
+    <h2>Get started</h2>
+    <h3 id="download">1. Download the CLI</h3>
+    <p class="gap-note">Prebuilt <code>opnscn</code> binaries are not published yet — downloads for macOS, Linux and Windows are coming. Contact <a href="https://filoz.org" target="_blank" rel="noopener">FilOz</a> for early access to the CLI source and build it with Rust: <code>cargo build --release --bin opnscn</code>.</p>
+    <h3 id="setup">2. Point it at ScionBase</h3>
+    ${pre([ENV, 'opnscn server-info'])}
+    <h3 id="user">3. Create a user</h3>
+    <p>On the web: <a href="/#/login">Sign in / create account</a>. Or with the CLI:</p>
+    ${pre(['opnscn signup --username <you> --email <you@example.com>', 'opnscn login --user <you>'])}
+    <h3 id="org">4. Your org and first repo</h3>
+    <p>Your username is your org: it is created with your first repository. Org admins can create repos in orgs you belong to.</p>
+    ${pre(['opnscn repo create <name>', 'opnscn repo create <name> --org <org>'])}
+    <h3 id="import">5. Push your code</h3>
+    ${pre(['cd path/to/your-project', 'opnscn import . --repo <you>/<name> -m "initial import"', '# then, for each change:', 'opnscn commit -m "describe the change"'])}
+    <p><a class="btn btn-primary" href="/#/getting-started">Full CLI guide: clone, branch, PR, sync →</a></p>
   </div></section>
 
   <section id="pricing" class="section"><div class="container">
@@ -466,52 +464,37 @@ const Home = () => html`
   </div></section>`;
 
 const GettingStarted = () => html`
-  <div class="download-hero"><div class="container"><h1>Getting started</h1>
-    <p class="tiny-note">Commands match <code>opnscn --help</code> from <a href="https://github.com/scionhub/openscion" target="_blank" rel="noopener">scionhub/openscion</a> and <a href="${API}/docs" data-external>live /docs</a>. <a href="/cli.html" data-external>Download the CLI</a>.</p></div></div>
   <div class="page"><div class="container docs-content">
-    <h2 id="setup">1. Point the CLI at ScionHub</h2>
-    <p>Every command also accepts <code>--server &lt;URL&gt;</code>.</p>
-    ${pre([ENV, 'opnscn server-info'])}
-
+    <h1>CLI guide</h1>
+    <p class="tiny-note">The ScionBase CLI is <code>opnscn</code>. Every command below matches <code>opnscn --help</code>. <a href="/#download">Download status</a>.</p>
+    <h2 id="setup">1. Point the CLI at ScionBase</h2>
+    <p>Every command accepts <code>--server &lt;URL&gt;</code>; an alias sets it once.</p>
+    ${pre([ENV, 'opnscn server-info', 'opnscn version'])}
     <h2 id="account">2. Create an account and log in</h2>
-    <p>Needed for writes. Username must match <code>^[a-z0-9][a-z0-9-]{2,31}$</code>; password at least 10 characters. Or use the <a href="/#/login">web signup / login</a>.</p>
+    <p>Needed for writes. Username must match <code>^[a-z0-9][a-z0-9-]{2,31}$</code>; password at least 10 characters. Or use the <a href="/#/login">web sign in</a>.</p>
     ${pre(['opnscn signup --username <you>', 'opnscn signup --username <you> --email <you@example.com>', 'opnscn login --user <you>'])}
-
     <h2 id="create">3. Create a repository</h2>
-    <p>Logged-in users can create a public repo under their username org (created on first use) or an org they belong to. <code>filecoin-project</code> stays admin-only. Non-admins are limited to 3 repos. The name must match <code>^[a-z0-9][a-z0-9._-]{0,63}$</code>.</p>
-    <p>On the web: <a href="/#/new">New repository</a> (sign in first). With the CLI:</p>
+    <p>Creates a public repo under your username org (created on first use) or an org you belong to. <code>filecoin-project</code> is admin-only. Non-admins: 3 repos max. Name: <code>^[a-z0-9][a-z0-9._-]{0,63}$</code>. On the web: <a href="/#/new">New repository</a>.</p>
     ${pre(['opnscn repo create <name>', 'opnscn repo create <name> --org <org>'])}
-    <p>Then import or push the first commit:</p>
-    ${pre(['opnscn import ./src --repo <org>/<repo>', '# or, from a working copy of that repo:', 'opnscn commit -m "first" --ref main'])}
-
     <h2 id="import">4. Import / push a directory</h2>
     <p><code>opnscn import</code> records a directory as the repository’s first changeset, creates the ref, and turns the directory into a working copy. Content is stored on Filecoin and addressed by PieceCID.</p>
-    ${pre(['cd path/to/your-project', 'opnscn import . --repo <org>/<repo> --ref main -m "initial import" --author <you>'])}
-    <p>After the import, keep pushing changes from the same directory:</p>
-    ${pre(['opnscn commit -m "describe the change"'])}
-
+    ${pre(['cd path/to/your-project', 'opnscn import . --repo <org>/<repo> --ref main -m "initial import" --author <you>', '# keep pushing changes from the same directory:', 'opnscn commit -m "describe the change"'])}
     <h2 id="clone">5. Clone an existing repo</h2>
     <p>Public clones need no account.</p>
     ${pre(['opnscn clone ./curio --repo filecoin-project/curio', 'opnscn clone ./curio --repo filecoin-project/curio --ref main', 'opnscn clone ./curio --repo filecoin-project/curio --path src'])}
-
     <h2 id="branch">6. Branch, commit, open a PR</h2>
     <p>Org members can move any ref. Anyone logged in can push under <code>refs/heads/users/&lt;you&gt;/*</code> on a public repo.</p>
-    ${pre(['cd curio', '# edit files, then publish to refs/heads/users/<you>/my-feature', 'opnscn branch push my-feature -m "my change"', 'opnscn pr create --title "My change" --head refs/heads/users/<you>/my-feature --base main', 'opnscn pr list', 'opnscn pr show <number>', 'opnscn pr merge <number>   # org member or admin; fast-forward'])}
-
+    ${pre(['cd curio', '# edit files, then publish to refs/heads/users/<you>/my-feature', 'opnscn branch push my-feature -m "my change"', 'opnscn pr create --title "My change" --head refs/heads/users/<you>/my-feature --base main', 'opnscn pr list', 'opnscn pr show <number>', 'opnscn pr merge <number>   # org member or admin; fast-forward', 'opnscn pr close <number>'])}
     <h2 id="sync">7. Sync a branch and resolve conflicts</h2>
-    <p><code>opnscn sync</code> three-way-merges the working copy with a target ref (default <code>main</code>), including uncommitted local edits. Upstream-only changes are taken; local-only changes are kept; both-changed paths get git-style markers. The next <code>opnscn commit</code> / <code>opnscn branch push</code> records a changeset whose first parent is that target so <code>opnscn pr merge</code> can fast-forward. Commit refuses while <code>&lt;&lt;&lt;&lt;&lt;&lt;&lt; local</code> markers remain.</p>
-    ${pre(['opnscn clone ./work --repo alice/my-repo', 'cd work', 'opnscn branch push feature', '# ... meanwhile main moved; edit files, then:', 'opnscn sync', 'opnscn sync --from main --dir .'])}
-    <p>A conflicted file looks like:</p>
+    <p><code>opnscn sync</code> three-way-merges the working copy with a target ref (default <code>main</code>), including uncommitted local edits. Both-changed paths get git-style markers; commit refuses while markers remain.</p>
+    ${pre(['opnscn sync', 'opnscn sync --from main --dir .'])}
     <pre class="conflict-sample"><code><span class="mark">&lt;&lt;&lt;&lt;&lt;&lt;&lt; local</span>
 the line as it is on your branch
 =======
 the line as it is on main
 <span class="mark">&gt;&gt;&gt;&gt;&gt;&gt;&gt; main</span></code></pre>
-    <p>Edit the file to the resolved contents (remove the markers), then:</p>
-    ${pre(['opnscn commit -m "merge main"', 'opnscn branch push feature', 'opnscn pr create --title "Feature" --head refs/heads/users/alice/feature', 'opnscn pr merge 1'])}
-
-    <h2>Browse</h2>
-    <p>See <a href=${orgUrl('filecoin-project')}>filecoin-project repositories</a>.</p>
+    ${pre(['opnscn commit -m "merge main"', 'opnscn branch push my-feature', 'opnscn pr merge <number>'])}
+    <p>Browse <a href="/#/orgs">organizations</a>.</p>
   </div></div>`;
 
 const LoginView = () => {
@@ -519,7 +502,7 @@ const LoginView = () => {
   const view = () => html`
     <div class="page"><div class="container">
       <h1>Sign in</h1>
-      <p class="tiny-note">Accounts are stored on the OpenScion API. Username <code>^[a-z0-9][a-z0-9-]{2,31}$</code>, password at least 10 characters.</p>
+      <p class="tiny-note">Accounts are stored on ScionBase. Username <code>^[a-z0-9][a-z0-9-]{2,31}$</code>, password at least 10 characters.</p>
       <div class="auth-grid">
         <form class="card form" @submit=${onLogin}>
           <h2 style="margin-top:0">Log in</h2>
@@ -662,8 +645,7 @@ const OrgView = (org) => {
   const st = { s: null };
   const view = (s) => html`
     <div class="page-head"><div class="container"><div class="subnav">
-      <a class="btn" href="/orgs/new.html" data-external>New organization</a>
-      ${getAuth() ? html`<a class="btn btn-primary" href="/#/new">New repository</a>` : nothing}
+            ${getAuth() ? html`<a class="btn btn-primary" href="/#/new">New repository</a>` : nothing}
     </div></div></div>
     <div class="page"><div class="container layout-2col">
       <aside class="sidebar"><div class="card">
@@ -673,7 +655,7 @@ const OrgView = (org) => {
         <p class="tiny-note">Repo content stored on Filecoin (PDP dataset ${DATASET}). POC.</p>
       </div></aside>
       <section class="content">
-        <h3 style="margin-bottom:.5rem;">Repositories ${s ? srcTag(s) : nothing}</h3>
+        <h3 style="margin-bottom:.5rem;">Repositories</h3>
         <ul class="repo-list">${!s ? html`<li class="repo-item"><span class="muted">Loading…</span></li>`
           : s.data.length ? s.data.map((r) => html`<li class="repo-item"><a href=${repoUrl(org, r)}><strong>${org}/${r}</strong></a><span class="badge">public</span></li>`)
           : html`<li class="repo-item"><span class="muted">No repositories yet.</span></li>`}</ul>
@@ -820,7 +802,7 @@ const RepoView = (org, repo, opts) => {
     return html`
       <div class="blob-head"><span>${st.path.split('/').pop()} · ${fmtSize(size)} ${rawLink}</span>
         ${range ? html`<span class="tiny-note"><code>${range}</code></span>` : nothing}</div>
-      <div class="blob-frame with-head"><table class="blob-table">${lines.map((ln, i) => html`<tr><td class="ln">${i + 1}</td><td class="src">${ln}</td></tr>`)}</table></div>
+      <div class="blob-frame with-head">${codeBlock(st.path, lines.join('\n'), lines.length)}</div>
       ${truncated ? html`<p class="tiny-note">Preview truncated.</p>` : nothing}`;
   };
 
@@ -851,7 +833,6 @@ const RepoView = (org, repo, opts) => {
         <button type="button" @click=${onCopy}>${st.copied ? 'Copied' : 'Copy'}</button>
       </div>
     </div>
-    ${crumbs()}
     ${st.kind === 'blob' ? blobView() : html`${fileTable()}${readmeView()}`}`;
 
   const pullsTab = () => {
@@ -866,7 +847,7 @@ const RepoView = (org, repo, opts) => {
     }
     const rows = pullList(st.pulls).filter((p) => (p.state || 'open') === 'open');
     return html`
-      <h2 style="margin-top:0">Open pull requests ${st.pulls ? srcTag(st.pulls) : nothing}</h2>
+      <h2 style="margin-top:0">Open pull requests</h2>
       ${!st.pulls ? html`<p class="muted">Loading…</p>`
         : !st.pulls.live ? html`<p class="muted">Couldn't load pull requests (${st.pulls.error}). Try <code>opnscn pr list --repo ${full}</code>.</p>`
         : rows.length ? html`<ul class="repo-list">${rows.map((p) => html`<li class="repo-item pr-item">
@@ -892,13 +873,6 @@ the line as it is on main
     <p class="tiny-note"><a href="/#/getting-started">Full getting-started guide</a></p>`;
 
   const view = () => html`
-    <div class="page-head"><div class="container repo-head">
-      <div class="repo-title">
-        <div class="tiny-note"><a href=${orgUrl(org)}>${org}</a> /</div>
-        <h1><a href=${repoUrl(org, repo)}>${repo}</a> <span class="badge">${st.info?.data?.visibility || 'public'}</span> ${st.info ? srcTag(st.info) : nothing}</h1>
-      </div>
-      ${st.info?.live && st.info.data.created_at ? html`<div class="tiny-note">Created ${fmtTime(st.info.data.created_at)}</div>` : nothing}
-    </div></div>
     <div class="page"><div class="container">
       <nav class="repo-tabs" aria-label="Repository">
         <a href=${repoUrl(org, repo)} aria-current=${st.tab === 'code' ? 'page' : nothing}>Code</a>
@@ -960,6 +934,108 @@ the line as it is on main
   };
 };
 
+/* ---------- syntax highlighting (lazy highlight.js) ---------- */
+const HL_BASE = 'https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.10.0';
+const EXT_LANG = { go: 'go', rs: 'rust', js: 'javascript', mjs: 'javascript', cjs: 'javascript', ts: 'typescript', tsx: 'typescript', jsx: 'javascript',
+  py: 'python', rb: 'ruby', java: 'java', kt: 'kotlin', c: 'c', h: 'c', cc: 'cpp', cpp: 'cpp', hpp: 'cpp', cs: 'csharp', sh: 'bash', bash: 'bash',
+  zsh: 'bash', json: 'json', yml: 'yaml', yaml: 'yaml', toml: 'ini', ini: 'ini', md: 'markdown', html: 'xml', xml: 'xml', svg: 'xml', css: 'css',
+  scss: 'scss', sql: 'sql', proto: 'protobuf', sol: 'javascript', swift: 'swift', php: 'php', lua: 'lua', makefile: 'makefile', mk: 'makefile', dockerfile: 'dockerfile', diff: 'diff' };
+function langFor(path) {
+  const name = (path.split('/').pop() || '').toLowerCase();
+  if (name === 'makefile') return 'makefile';
+  if (name === 'dockerfile') return 'dockerfile';
+  if (name === 'go.mod' || name === 'go.sum') return null;
+  const ext = name.includes('.') ? name.split('.').pop() : '';
+  return EXT_LANG[ext] || null;
+}
+let hljsPromise = null;
+function loadHljs() {
+  if (!hljsPromise) {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = `${HL_BASE}/styles/github-dark.min.css`;
+    document.head.appendChild(link);
+    hljsPromise = import(`${HL_BASE}/es/highlight.min.js`).then((m) => m.default || m);
+  }
+  return hljsPromise;
+}
+const hlCache = new Map();
+function codeBlock(path, text, count) {
+  const lang = langFor(path);
+  const key = `${path}\u0000${text.length}`;
+  const cached = hlCache.get(key);
+  if (lang && !cached) {
+    hlCache.set(key, { pending: true });
+    loadHljs().then((hljs) => {
+      try {
+        const out = hljs.getLanguage(lang) ? hljs.highlight(text, { language: lang, ignoreIllegals: true }).value : null;
+        hlCache.set(key, { html: out });
+      } catch { hlCache.set(key, { html: null }); }
+      draw();
+    }).catch(() => { hlCache.set(key, { html: null }); draw(); });
+  }
+  const nums = Array.from({ length: count }, (_, i) => i + 1).join('\n');
+  const body = cached?.html != null ? unsafeHTML(cached.html) : text;
+  return html`<div class="code-wrap"><pre class="ln-col" aria-hidden="true">${nums}</pre><pre class="code-col"><code class=${`hljs${lang ? ` language-${lang}` : ''}`}>${body}</code></pre></div>`;
+}
+
+/* ---------- orgs list ---------- */
+const OrgsView = () => {
+  const st = { orgs: null, err: '' };
+  return {
+    view: () => html`<div class="page"><div class="container">
+      <h1>Organizations</h1>
+      <ul class="repo-list">${!st.orgs ? html`<li class="repo-item"><span class="muted">${st.err || 'Loading…'}</span></li>`
+        : st.orgs.length ? st.orgs.map((o) => html`<li class="repo-item"><a href=${orgUrl(o)}><strong>${o}</strong></a></li>`)
+        : html`<li class="repo-item"><span class="muted">No organizations yet.</span></li>`}</ul>
+      <p class="tiny-note">Your username is your first org: it is created when you create your first repository. <a href="/#/new">New repository</a></p>
+    </div></div>`,
+    load: async (rerender) => {
+      try {
+        const d = await api('/v1/orgs');
+        const list = Array.isArray(d) ? d : d?.orgs || [];
+        st.orgs = list.map((o) => (typeof o === 'string' ? o : o.name || o.id));
+      } catch (e) { st.err = `Could not load organizations (${e.message}).`; st.orgs = null; }
+      rerender();
+    },
+  };
+};
+
+/* ---------- top bar: breadcrumb + home-only marketing nav ---------- */
+function drawChrome() {
+  const { parts } = parseLocation();
+  const isHome = parts.length === 0;
+  document.body.classList.toggle('is-home', isHome);
+  const mk = document.getElementById('marketing-nav');
+  if (mk) {
+    render(isHome ? html`<li><a href="/#problem">Why</a></li><li><a href="/#start">Get started</a></li><li><a href="/#download">Download CLI</a></li><li><a href="/#pricing">Pricing</a></li>` : nothing, mk);
+  }
+  const el = document.getElementById('crumbs');
+  if (!el) return;
+  const items = [];
+  const sep = () => html`<span class="sep">/</span>`;
+  if (parts[0] === 'orgs' || parts[0] === 'login' || parts[0] === 'new' || parts[0] === 'getting-started') {
+    const label = { orgs: 'orgs', login: 'sign in', new: 'new repository', 'getting-started': 'getting started' }[parts[0]];
+    items.push(html`<span>${label}</span>`);
+  } else if (parts.length >= 1) {
+    const [org, repo, kind, ref, ...rest] = parts;
+    items.push(html`<a href=${orgUrl(org)}>${org}</a>`);
+    if (repo) { items.push(sep()); items.push(html`<a href=${repoUrl(org, repo)}><strong>${repo}</strong></a>`); }
+    if (repo && kind === 'pulls') { items.push(sep()); items.push(html`<a href=${repoUrl(org, repo, ['pulls'])}>pulls</a>`); if (ref) { items.push(sep()); items.push(html`<span>#${ref}</span>`); } }
+    if (repo && kind === 'sync') { items.push(sep()); items.push(html`<span>sync</span>`); }
+    if (repo && (kind === 'tree' || kind === 'blob')) {
+      if (ref && ref !== 'main') { items.push(html`<span class="ref-chip">${ref}</span>`); }
+      rest.forEach((seg, i) => {
+        const sub = rest.slice(0, i + 1).join('/');
+        const last = i === rest.length - 1;
+        items.push(sep());
+        items.push(last && kind === 'blob' ? html`<span>${seg}</span>` : html`<a href=${treeUrl(org, repo, ref || 'main', sub)}>${seg}</a>`);
+      });
+    }
+  }
+  render(items.length ? html`<span class="sep">/</span>${items}` : nothing, el);
+}
+
 const NotFound = () => html`<div class="page"><div class="container"><h1>Not found</h1><p><a href="/">Back home</a></p></div></div>`;
 
 /* ---------- router ---------- */
@@ -968,6 +1044,7 @@ let current = null;
 let lastKey = '';
 
 function draw() {
+  drawChrome();
   if (current && main) render(current.view(), main);
 }
 
@@ -1000,18 +1077,19 @@ function parseLocation() {
 }
 
 function routeFromParts(parts) {
-  if (parts.length === 0) return { view: Home, title: 'ScionHub' };
-  if (parts.length === 1 && parts[0] === 'getting-started') return { view: GettingStarted, title: 'Getting started — ScionHub' };
+  if (parts.length === 0) return { view: Home, title: 'ScionBase' };
+  if (parts.length === 1 && parts[0] === 'getting-started') return { view: GettingStarted, title: 'Getting started — ScionBase' };
+  if (parts.length === 1 && parts[0] === 'orgs') return Object.assign(OrgsView(), { title: 'Organizations — ScionBase' });
   if (parts.length === 1 && parts[0] === 'login') return LoginView();
   if (parts.length === 1 && parts[0] === 'new') return NewRepoView();
   if (parts.length === 1) {
     const v = OrgView(parts[0]);
-    v.title = `${parts[0]} — ScionHub`;
+    v.title = `${parts[0]} — ScionBase`;
     return v;
   }
   const org = parts[0];
   const repo = parts[1];
-  const title = `${org}/${repo} — ScionHub`;
+  const title = `${org}/${repo} — ScionBase`;
   if (parts.length === 2) return Object.assign(RepoView(org, repo, { tab: 'code', kind: 'tree', ref: 'main', path: '' }), { title });
   const third = parts[2];
   if (third === 'pulls') {
@@ -1025,7 +1103,7 @@ function routeFromParts(parts) {
     const path = parts.slice(4).join('/');
     return Object.assign(RepoView(org, repo, { tab: 'code', kind: third, ref, path }), { title });
   }
-  return { view: NotFound, title: 'Not found — ScionHub' };
+  return { view: NotFound, title: 'Not found — ScionBase' };
 }
 
 function navHrefActive(href) {
@@ -1050,9 +1128,9 @@ function route() {
   const { parts, section } = parseLocation();
   current = routeFromParts(parts);
   document.title = current.title || (
-    parts[0] === 'login' ? 'Sign in — ScionHub'
-      : parts[0] === 'new' ? 'New repository — ScionHub'
-        : 'ScionHub'
+    parts[0] === 'login' ? 'Sign in — ScionBase'
+      : parts[0] === 'new' ? 'New repository — ScionBase'
+        : 'ScionBase'
   );
   document.querySelectorAll('#site-nav a').forEach((a) => {
     const href = a.getAttribute('href') || '';

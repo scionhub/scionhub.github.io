@@ -3,63 +3,39 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>ScionHub — Agent‑scale monorepo on verifiable Filecoin storage</title>
-    <meta name="description" content="ScionHub is hosted OpenScion with repository content stored on Filecoin via PDP, addressed by PieceCID and read directly from the storage provider. Proof of concept." />
+    <title>ScionBase — Code hosting on verifiable Filecoin storage</title>
+    <meta name="description" content="ScionBase is git-like code hosting with repository content stored on Filecoin via PDP, addressed by PieceCID and read directly from the storage provider. Proof of concept." />
     <meta name="theme-color" content="#0b8b6f" />
-    <meta property="og:title" content="ScionHub — Agent‑scale monorepo on verifiable Filecoin storage" />
-    <meta property="og:description" content="Hosted OpenScion with Filecoin PDP storage. Repo content addressed by PieceCID. POC." />
+    <meta property="og:site_name" content="ScionBase" />
+    <meta property="og:title" content="ScionBase — Code hosting on verifiable Filecoin storage" />
+    <meta property="og:description" content="Git-like code hosting on Filecoin PDP. Repo content addressed by PieceCID, read directly from storage providers. POC." />
     <link rel="icon" href="/assets/images/favicon.svg" />
     <link rel="stylesheet" href="/assets/css/styles.css" />
     <link rel="stylesheet" href="/assets/css/app.css" />
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
-    <header class="site-header" role="banner">
+    <header class="site-header topbar" role="banner">
       <div class="container header-inner">
-        <a class="brand" href="/" aria-label="ScionHub home">
-          <img src="/assets/images/logo.svg" width="28" height="28" alt="" />
-          <span class="brand-name">ScionHub</span>
-        </a>
-        <button class="nav-toggle" aria-expanded="false" aria-controls="site-nav" aria-label="Toggle navigation">
-          <span class="nav-toggle-bar"></span>
-          <span class="sr-only">Menu</span>
-        </button>
+        <div class="topbar-left">
+          <a class="brand" href="/" aria-label="ScionBase home">
+            <img src="/assets/images/logo.svg" width="28" height="28" alt="" />
+            <span class="brand-name">ScionBase</span>
+          </a>
+          <a class="topbar-link" href="/#/orgs">Orgs</a>
+          <nav id="crumbs" class="topbar-crumbs" aria-label="Breadcrumb"></nav>
+        </div>
         <nav id="site-nav" class="site-nav" aria-label="Primary">
           <ul>
-            <li><a href="/#/filecoin-project">filecoin-project</a></li>
-            <li><a href="/#/getting-started">Getting Started</a></li>
-            <li><a href="/cli.html" data-external>Download CLI</a></li>
-            <li><a href="/#pricing">Pricing</a></li>
-            <li><a class="btn btn-ghost" href="https://github.com/scionhub/openscion" target="_blank" rel="noopener">OpenScion</a></li>
+            <span id="marketing-nav" style="display:contents"></span>
             <li id="nav-auth"></li>
           </ul>
         </nav>
       </div>
     </header>
-    <main id="main" tabindex="-1"><noscript><div class="container page"><p>ScionHub needs JavaScript for this page.</p></div></noscript></main>
+    <main id="main" tabindex="-1"><noscript><div class="container page"><p>ScionBase needs JavaScript for this page.</p></div></noscript></main>
     <footer class="site-footer">
-      <div class="container footer-inner">
-        <div class="footer-col">
-          <a class="brand" href="/" aria-label="ScionHub home">
-            <img src="/assets/images/logo.svg" width="24" height="24" alt="" />
-            <span class="brand-name">ScionHub</span>
-          </a>
-          <p class="tiny-note">Hosted OpenScion. Repo content on Filecoin via PDP, addressed by PieceCID. POC.</p>
-        </div>
-        <nav class="footer-col" aria-label="Footer">
-          <ul class="footer-links">
-            <li><a href="/#/getting-started">Getting started</a></li>
-            <li><a href="/#/filecoin-project">filecoin-project</a></li>
-            <li><a href="/#pricing">Pricing</a></li>
-            <li><a href="/checkout.html" data-external>Checkout (POC)</a></li>
-          </ul>
-        </nav>
-        <div class="footer-col">
-          <p>Source: <a href="https://github.com/scionhub/openscion" target="_blank" rel="noopener">scionhub/openscion</a></p>
-          <p>Contact: <a href="https://filoz.org" target="_blank" rel="noopener">FilOz</a></p>
-        </div>
-      </div>
-      <div class="container legal"><small>© <span id="year"></span> ScionHub — Proof of Concept</small></div>
+      <div class="container legal"><small>© <span id="year"></span> ScionBase — Proof of Concept · <a href="https://filoz.org" target="_blank" rel="noopener">FilOz</a></small></div>
     </footer>
     <script src="/assets/js/config.js"></script>
     <script src="/assets/js/main.js" defer></script>
