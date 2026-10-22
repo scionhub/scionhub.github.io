@@ -72,7 +72,7 @@ const Home = () => html`
         <div class="diagram-row"><span class="badge accent">Filecoin PDP</span><span class="arrow" aria-hidden="true">⇄</span><span class="badge">PieceCID</span></div>
       </div></div>
     </div>
-    <p class="note">POC note: some recent branch commits are not yet bundled to the storage provider; see the OpenScion PoC limits.</p>
+    <p class="note">Commits and merged PRs upload only new or changed content to the storage provider; unchanged files keep their existing PieceCIDs, so every branch and merged <code>main</code> clones straight from Filecoin.</p>
   </div></section>
 
   <section id="pricing" class="section"><div class="container">
