@@ -1,7 +1,7 @@
 // Configure the OpenScion Worker API base URL for persistence attempts.
 // Example: "https://openscion.example.workers.dev"
 // Leave empty to disable network calls (confirmation will still show; persistence pending).
-window.SCIONHUB_API_BASE = "";
+window.SCIONHUB_API_BASE = "https://openscion-filecoin-poc.jolly-bush-400d.workers.dev";
 
 // CLI release URLs and asset names (adjust here as needed)
 window.SCIONHUB_RELEASE_BASE = "https://github.com/scionhub/openscion/releases/latest/download/";
