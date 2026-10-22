@@ -18,8 +18,8 @@
         </a>
         <nav class="site-nav" aria-label="Primary">
           <ul>
-            <li><a href="./index.html">Organizations</a></li>
-            <li><a href="../getting-started.html">Getting Started</a></li>
+            <li><a href="/filecoin-project">Organizations</a></li>
+            <li><a href="/getting-started">Getting Started</a></li>
             <li><a href="../cli.html">Download CLI</a></li>
             <li><a href="../#pricing">Pricing</a></li>
             <li><a class="btn btn-ghost" href="https://github.com/scionhub/openscion" target="_blank" rel="noopener">OpenScion</a></li>
@@ -80,7 +80,7 @@
             </dl>
           </div>
           <div class="form-actions">
-            <a class="btn btn-primary" href="./index.html">Back to Organizations</a>
+            <a class="btn btn-primary" href="/filecoin-project">Back to Organizations</a>
             <a class="btn btn-ghost" href="../">Back to home</a>
           </div>
         </section>
@@ -108,7 +108,7 @@
           if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { document.getElementById('contact-email').focus(); return; }
           const ref = 'org_' + Math.random().toString(36).slice(2, 8);
           let backendStatus = 'not configured';
-          // Attempt to record to OpenScion Worker if configured
+          // Attempt to record to OpenScion API if configured
           const base = (window && window.SCIONHUB_API_BASE) ? String(window.SCIONHUB_API_BASE).trim() : '';
           if (base) {
             try {

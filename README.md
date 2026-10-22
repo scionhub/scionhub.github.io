@@ -2,7 +2,7 @@
 
 This repository contains a responsive, accessible, static marketing site for ScionHub:
 
-- Hosted OpenScion on Cloudflare Workers + D1
+- Hosted OpenScion; repo content stored on Filecoin via PDP, addressed by PieceCID, read directly from the SP
 - Verifiable storage on Filecoin via the PDP API (Synapse SDK), identified by PieceCID
 - GitHub-like multi-tenant model (first org: `filecoin-project`)
 - Proof of concept — claims are intentionally conservative

@@ -4,22 +4,20 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>ScionHub — Agent‑scale monorepo on verifiable Filecoin storage</title>
-    <meta name="description" content="ScionHub is a hosted OpenScion on Cloudflare Workers + D1 with verifiable Filecoin storage via the PDP API (Synapse SDK). Multi-tenant, GitHub-like model. Proof of concept." />
+    <meta name="description" content="ScionHub is hosted OpenScion with repository content stored on Filecoin via PDP, addressed by PieceCID and read directly from the storage provider. Proof of concept." />
     <meta name="theme-color" content="#0b8b6f" />
     <meta property="og:title" content="ScionHub — Agent‑scale monorepo on verifiable Filecoin storage" />
-    <meta property="og:description" content="Hosted OpenScion with Filecoin-backed, verifiable storage. Massive repo scale for AI agents, zero infrastructure to run. POC." />
-    <meta property="og:type" content="website" />
-    <meta property="og:image" content="./assets/images/favicon.svg" />
-    <link rel="icon" href="./assets/images/favicon.svg" />
-    <link rel="preload" href="./assets/css/styles.css" as="style" />
-    <link rel="stylesheet" href="./assets/css/styles.css" />
+    <meta property="og:description" content="Hosted OpenScion with Filecoin PDP storage. Repo content addressed by PieceCID. POC." />
+    <link rel="icon" href="/assets/images/favicon.svg" />
+    <link rel="stylesheet" href="/assets/css/styles.css" />
+    <link rel="stylesheet" href="/assets/css/app.css" />
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
     <header class="site-header" role="banner">
       <div class="container header-inner">
-        <a class="brand" href="./" aria-label="ScionHub home">
-          <img src="./assets/images/logo.svg" width="28" height="28" alt="" />
+        <a class="brand" href="/" aria-label="ScionHub home">
+          <img src="/assets/images/logo.svg" width="28" height="28" alt="" />
           <span class="brand-name">ScionHub</span>
         </a>
         <button class="nav-toggle" aria-expanded="false" aria-controls="site-nav" aria-label="Toggle navigation">
@@ -28,217 +26,43 @@
         </button>
         <nav id="site-nav" class="site-nav" aria-label="Primary">
           <ul>
-            <li><a href="./orgs/index.html">Organizations</a></li>
-            <li><a href="./getting-started.html">Getting Started</a></li>
-            <li><a href="./cli.html">Download CLI</a></li>
-            <li><a href="#benefits">Benefits</a></li>
-            <li><a href="#architecture">Architecture</a></li>
-            <li><a href="#pricing">Pricing</a></li>
+            <li><a href="/filecoin-project">filecoin-project</a></li>
+            <li><a href="/getting-started">Getting Started</a></li>
+            <li><a href="/cli.html" data-external>Download CLI</a></li>
+            <li><a href="/#pricing">Pricing</a></li>
             <li><a class="btn btn-ghost" href="https://github.com/scionhub/openscion" target="_blank" rel="noopener">OpenScion</a></li>
-            <li><a class="btn btn-primary" href="./checkout.html">Get started</a></li>
+            <li><a class="btn btn-primary" href="/getting-started#import">Import a repo</a></li>
           </ul>
         </nav>
       </div>
     </header>
-
-    <main id="main" tabindex="-1">
-      <section class="hero">
-        <div class="container hero-inner">
-          <div class="hero-copy">
-            <h1>
-              Agent‑scale monorepo.<br />
-              Verifiable storage.<br />
-              Zero infra to run.
-            </h1>
-            <p class="lede">
-              ScionHub hosts <strong>OpenScion</strong> on <strong>Cloudflare Workers + D1</strong>,
-              persisting data to <strong>Filecoin</strong> via the <strong>PDP API (Synapse SDK)</strong>,
-              identified by <strong>PieceCID</strong> — with a GitHub‑like multi‑tenant model
-              (first org: <em>filecoin-project</em>).
-            </p>
-            <p class="disclaimer">
-              This is a <strong>proof of concept</strong>. Keep expectations realistic; we keep claims honest.
-            </p>
-            <div class="hero-cta">
-              <a class="btn btn-primary btn-lg" href="./checkout.html">Get started — free*</a>
-              <a class="btn btn-ghost btn-lg" href="#benefits">See how it works</a>
-              <a class="btn btn-ghost btn-lg" href="./getting-started.html">Getting started guide</a>
-            </div>
-            <p class="tiny-note">* Free for the first 6 months or first 1 GB, whichever comes first.</p>
-          </div>
-          <figure class="hero-art" aria-labelledby="hero-art-caption">
-            <div class="art-card">
-              <div class="art-row">
-                <span class="chip">OpenScion</span>
-                <span class="chip">Cloudflare Workers</span>
-                <span class="chip">D1</span>
-              </div>
-              <div class="art-row">
-                <span class="chip chip-accent">Filecoin PDP</span>
-                <span class="chip">Synapse SDK</span>
-                <span class="chip">PieceCID</span>
-              </div>
-              <div class="art-row">
-                <span class="chip">Multi‑tenant</span>
-                <span class="chip">Agent‑scale</span>
-                <span class="chip">Monorepo</span>
-              </div>
-            </div>
-            <figcaption id="hero-art-caption" class="sr-only">
-              Diagrammatic list of ScionHub building blocks: OpenScion, Cloudflare Workers, D1, Filecoin PDP via Synapse SDK, PieceCID identifiers, multi-tenant, agent-scale monorepo.
-            </figcaption>
-          </figure>
-        </div>
-      </section>
-
-      <section id="benefits" class="section">
-        <div class="container">
-          <h2>Why ScionHub</h2>
-          <div class="grid features">
-            <article class="card">
-              <h3>Agent‑scale monorepo</h3>
-              <p>
-                Designed for <strong>AI agents collaborating in one repo</strong>, at massive scale. Familiar
-                workflows, branches, and orgs — no bespoke coordination layer required.
-              </p>
-            </article>
-            <article class="card">
-              <h3>Verifiable Filecoin storage</h3>
-              <p>
-                Data is committed to <strong>Filecoin</strong> using the <strong>PDP API</strong> via the
-                <strong>Synapse SDK</strong>, recorded by <strong>PieceCID</strong> for content‑addressed integrity.
-              </p>
-            </article>
-            <article class="card">
-              <h3>Zero infra to run</h3>
-              <p>
-                Hosted on <strong>Cloudflare Workers + D1</strong>. No servers to maintain. Scale from POC
-                to heavy agent traffic without provisioning headaches.
-              </p>
-            </article>
-            <article class="card">
-              <h3>Multi‑tenant model</h3>
-              <p>
-                GitHub‑like orgs and repos. The first org is <strong>filecoin-project</strong>; bring your team next.
-              </p>
-            </article>
-          </div>
-        </div>
-      </section>
-
-      <section id="architecture" class="section alt">
-        <div class="container">
-          <h2>Architecture at a glance</h2>
-          <div class="grid arch">
-            <div class="arch-col">
-              <ul class="checklist">
-                <li>OpenScion core service (forked at <a href="https://github.com/scionhub/openscion" target="_blank" rel="noopener">scionhub/openscion</a>)</li>
-                <li>Request handling on Cloudflare Workers; metadata in D1</li>
-                <li>Data persists to Filecoin via PDP (Synapse SDK)</li>
-                <li>Every stored unit addressed by PieceCID</li>
-                <li>Multi‑tenant: orgs, repos, permissions</li>
-              </ul>
-            </div>
-            <div class="arch-col">
-              <div class="diagram" role="img" aria-label="High-level flow from agents to OpenScion to Workers/D1 to Filecoin PDP with PieceCID">
-                <div class="diagram-row">
-                  <span class="badge">AI agents</span>
-                  <span class="arrow" aria-hidden="true">→</span>
-                  <span class="badge">OpenScion API</span>
-                </div>
-                <div class="diagram-row">
-                  <span class="arrow" aria-hidden="true">⇣</span>
-                </div>
-                <div class="diagram-row">
-                  <span class="badge">Cloudflare Workers</span>
-                  <span class="arrow" aria-hidden="true">⇄</span>
-                  <span class="badge">D1 (metadata)</span>
-                </div>
-                <div class="diagram-row">
-                  <span class="arrow" aria-hidden="true">⇣</span>
-                </div>
-                <div class="diagram-row">
-                  <span class="badge accent">Filecoin PDP</span>
-                  <span class="arrow" aria-hidden="true">⇄</span>
-                  <span class="badge">PieceCID</span>
-                </div>
-              </div>
-            </div>
-          </div>
-          <p class="note">
-            Note: This is a <strong>POC</strong>. We aim for clarity over hype — components and claims are kept honest.
-          </p>
-        </div>
-      </section>
-
-      <section id="pricing" class="section">
-        <div class="container">
-          <h2>Pricing</h2>
-          <div class="pricing">
-            <div class="price-card">
-              <h3>Starter</h3>
-              <p class="price">$0</p>
-              <ul>
-                <li>First <strong>6 months</strong> or first <strong>1 GB</strong> — whichever comes first</li>
-                <li>Includes org + repos</li>
-                <li>Community support</li>
-              </ul>
-            </div>
-            <div class="price-card highlight" aria-label="standard plan">
-              <h3>Standard</h3>
-              <p class="price">
-                <span class="price-number">$5</span>
-                <span class="price-unit">/ GB / month</span>
-              </p>
-              <ul>
-                <li>Usage‑based, billed monthly</li>
-                <li>Payable in <strong>USD</strong> or <strong>ETH</strong></li>
-                <li>Cancel anytime</li>
-              </ul>
-              <a class="btn btn-primary btn-lg" href="./checkout.html">Get started</a>
-            </div>
-          </div>
-          <p class="disclaimer center">
-            Proof of concept: <strong>no real payment is taken</strong> in the checkout. If interested in pilots or production,
-            please contact <a href="https://filoz.org" target="_blank" rel="noopener">FilOz</a>.
-          </p>
-        </div>
-      </section>
-    </main>
-
+    <main id="main" tabindex="-1"><noscript><div class="container page"><p>ScionHub needs JavaScript for this page.</p></div></noscript></main>
     <footer class="site-footer">
       <div class="container footer-inner">
         <div class="footer-col">
-          <a class="brand" href="./" aria-label="ScionHub home">
-            <img src="./assets/images/logo.svg" width="24" height="24" alt="" />
+          <a class="brand" href="/" aria-label="ScionHub home">
+            <img src="/assets/images/logo.svg" width="24" height="24" alt="" />
             <span class="brand-name">ScionHub</span>
           </a>
-          <p class="tiny-note">Hosted OpenScion on Workers + D1. Data on Filecoin via PDP (Synapse SDK). POC.</p>
+          <p class="tiny-note">Hosted OpenScion. Repo content on Filecoin via PDP, addressed by PieceCID. POC.</p>
         </div>
         <nav class="footer-col" aria-label="Footer">
           <ul class="footer-links">
-            <li><a href="#benefits">Benefits</a></li>
-            <li><a href="#architecture">Architecture</a></li>
-            <li><a href="#pricing">Pricing</a></li>
-            <li><a href="./checkout.html">Get started</a></li>
+            <li><a href="/getting-started">Getting started</a></li>
+            <li><a href="/filecoin-project">filecoin-project</a></li>
+            <li><a href="/#pricing">Pricing</a></li>
+            <li><a href="/checkout.html" data-external>Checkout (POC)</a></li>
           </ul>
         </nav>
         <div class="footer-col">
-          <p>
-            Source: <a href="https://github.com/scionhub/openscion" target="_blank" rel="noopener">scionhub/openscion</a>
-          </p>
-          <p>
-            Contact: <a href="https://filoz.org" target="_blank" rel="noopener">FilOz</a>
-          </p>
+          <p>Source: <a href="https://github.com/scionhub/openscion" target="_blank" rel="noopener">scionhub/openscion</a></p>
+          <p>Contact: <a href="https://filoz.org" target="_blank" rel="noopener">FilOz</a></p>
         </div>
       </div>
-      <div class="container legal">
-        <small>© <span id="year"></span> ScionHub — Proof of Concept</small>
-      </div>
+      <div class="container legal"><small>© <span id="year"></span> ScionHub — Proof of Concept</small></div>
     </footer>
-
-    <script src="./assets/js/config.js" defer></script>
-    <script src="./assets/js/main.js" defer></script>
+    <script src="/assets/js/config.js"></script>
+    <script src="/assets/js/main.js" defer></script>
+    <script type="module" src="/assets/js/app.js"></script>
   </body>
-  </html>
-
+</html>

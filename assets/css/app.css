@@ -1,0 +1,10 @@
+.cli-panel pre, .docs-content pre { background:#0f172a; color:#e2e8f0; padding:.8rem 1rem; border-radius:8px; overflow-x:auto; font-size:.88rem; line-height:1.5; margin:.3rem 0 .9rem; }
+.cli-panel h4 { margin:.6rem 0 .1rem; font-size:.95rem; }
+.cli-tabs { display:flex; flex-wrap:wrap; gap:.4rem; margin-bottom:.6rem; }
+.cli-tabs button { font:inherit; padding:.3rem .7rem; border-radius:999px; border:1px solid var(--border); background:transparent; color:inherit; cursor:pointer; }
+.cli-tabs button[aria-selected="true"] { background:var(--brand, #0b8b6f); color:#fff; border-color:transparent; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:.88em; word-break:break-all; }
+.src-tag { font-size:.75rem; padding:.05rem .45rem; border-radius:999px; border:1px solid var(--border); margin-left:.4rem; opacity:.85; }
+.gap-note { border-left:3px solid #d97706; padding:.4rem .8rem; margin:.6rem 0; font-size:.9rem; }
+.repo-head h1 { margin:.2rem 0; font-size:1.6rem; }
+.kv { display:grid; grid-template-columns:max-content 1fr; gap:.3rem 1rem; font-size:.92rem; }
