@@ -139,9 +139,20 @@ async function copyText(text) {
   }
 }
 
+let mdBase = null;
+function repoRelHref(u) {
+  if (!mdBase || /^[a-z][a-z0-9+.-]*:/i.test(u) || u.startsWith('/') || u.startsWith('#')) return null;
+  const clean = u.split('#')[0].split('?')[0];
+  const segs = (mdBase.dir ? mdBase.dir.split('/') : []);
+  for (const seg of clean.split('/')) { if (seg === '..') segs.pop(); else if (seg && seg !== '.') segs.push(seg); }
+  const path = segs.join('/');
+  return clean.endsWith('/') ? treeUrl(mdBase.org, mdBase.repo, mdBase.ref, path) : blobUrl(mdBase.org, mdBase.repo, mdBase.ref, path);
+}
 function safeHref(url) {
   const u = String(url || '').trim();
   if (!u) return null;
+  const rel = repoRelHref(u);
+  if (rel) return rel;
   if (u.startsWith('/') || u.startsWith('#') || u.startsWith('mailto:')) return u;
   try {
     const parsed = new URL(u, location.href);
@@ -817,7 +828,7 @@ const RepoView = (org, repo, opts) => {
     const md = /\.md$/i.test(r.name);
     return html`<div class="readme-wrap card">
       <h2>${r.name}</h2>
-      ${md ? renderMarkdown(text) : html`<pre><code>${text}</code></pre>`}
+      ${md ? ((mdBase = { org, repo, ref: st.ref, dir: st.path }), renderMarkdown(text)) : html`<pre><code>${text}</code></pre>`}
     </div>`;
   };
 
