@@ -407,14 +407,31 @@ function entriesFromChanges(cs, dirPath) {
   return sortEntries([...dirs.values(), ...files]);
 }
 
+async function fillMissingSizes(org, repo, ref, path, entries) {
+  const missing = (entries || []).filter((e) => kindOf(e) !== 'dir' && entrySize(e) == null);
+  await Promise.all(missing.slice(0, 80).map(async (e) => {
+    const p = path ? `${path}/${e.name}` : e.name;
+    try {
+      const data = await api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/blob/${apiRef(ref)}?path=${encodeURIComponent(p)}`);
+      if (data && (data.size != null || data.length != null)) e.size = data.size ?? data.length;
+    } catch { /* keep empty */ }
+  }));
+}
+
 async function loadTree(org, repo, ref, path) {
   const q = path ? `?path=${encodeURIComponent(path)}` : '';
   try {
     const data = await api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/tree/${apiRef(ref)}${q}`);
-    return { live: true, entries: sortEntries(data.entries || []), data };
+    const entries = sortEntries(data.entries || []);
+    if (entries.some((e) => kindOf(e) !== 'dir' && entrySize(e) == null)) {
+      await fillMissingSizes(org, repo, ref, path, entries);
+    }
+    return { live: true, entries, data };
   } catch (e) {
     const { cs, refInfo } = await loadSnapshot(org, repo, ref);
-    return { live: false, fallback: true, error: e.message, entries: entriesFromChanges(cs, path), cs, refInfo };
+    const entries = entriesFromChanges(cs, path);
+    await fillMissingSizes(org, repo, ref, path, entries);
+    return { live: false, fallback: true, error: e.message, entries, cs, refInfo };
   }
 }
 
