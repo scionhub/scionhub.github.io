@@ -1890,10 +1890,12 @@ const RepoView = (org, repo, opts) => {
     if (confirm !== full || st.deleteBusy) return;
     st.deleteErr = ''; st.ownerErr = ''; st.deleteBusy = true; draw();
     try {
-      await api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}`, {
+      const res = await api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}`, {
         method: 'DELETE', auth: true, body: { confirm },
       });
       st.deleteBusy = false;
+      const n = (res && res.removedPieces) || 0;
+      alert(`Deleted ${full}. Scheduled removal of ${n} stored piece${n === 1 ? '' : 's'} from Filecoin${res && res.tx ? ` (tx ${res.tx})` : ''}.`);
       navigate(orgUrl(org));
     } catch (err) {
       st.deleteErr = err.message || String(err);
@@ -1949,7 +1951,7 @@ const RepoView = (org, repo, opts) => {
       </section>
       <section class="danger-zone" aria-label="Danger zone">
         <h2>Danger zone</h2>
-        <p>Filecoin storage is append-only: deleting removes this repository from listings, its refs and metadata. Stored pieces remain on Filecoin and are not deleted.</p>
+        <p>This permanently deletes <code>${full}</code>: its listing, branches, pull requests and metadata, and schedules removal of its stored data from Filecoin. This cannot be undone.</p>
         <form class="form" @submit=${deleteRepo}>
           <label for="delete-confirm">Type <code>${full}</code> to confirm</label>
           <input id="delete-confirm" class="confirm-input" type="text" autocomplete="off" spellcheck="false"
