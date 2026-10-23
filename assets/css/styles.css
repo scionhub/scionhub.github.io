@@ -152,7 +152,8 @@ ul { padding-left: 1.2rem; }
 .lede { font-size: 1.125rem; color: var(--muted); }
 .hero-cta { display: flex; gap: .75rem; flex-wrap: wrap; margin: 1rem 0; }
 .tiny-note { font-size: .85rem; color: var(--muted); margin-top: .5rem; }
-.hero-art { display: flex; justify-content: center; align-items: center; }
+.hero-art { display: flex; flex-direction: column; justify-content: center; align-items: center; }
+.hero-tagline { margin-top: .75rem; font-size: 1.15rem; font-weight: 600; color: var(--muted, #4b5b55); text-align: center; letter-spacing: .01em; }
 .hero-logo {
   width: min(28rem, 92%);
   height: auto;

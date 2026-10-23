@@ -729,6 +729,7 @@ const Home = () => html`
         <source type="image/webp" srcset="/assets/images/logo-512.webp" />
         <img class="hero-logo" src="/assets/images/logo-512.png" width="512" height="512" alt="ScionBase" />
       </picture>
+      <figcaption class="hero-tagline">agent-scale collaboration on verified storage</figcaption>
     </figure>
   </div></section>
 
