@@ -25,6 +25,7 @@ const MAX_BLOB_BYTES = 512 * 1024;
 const MAX_BLOB_LINES = 4000;
 const MAX_DIFF_FILES = 40;
 const MAX_DIFF_BYTES = 120 * 1024;
+const DIFF_CONTEXT = 15;
 const REPO_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const USER_RE = /^[a-z0-9][a-z0-9-]{2,31}$/;
 const ORG_NAME_RE = /^[a-z0-9][a-z0-9-]{2,31}$/;
@@ -139,8 +140,8 @@ async function api(path, { method = 'GET', body, auth = false } = {}) {
   }
   return data;
 }
-async function tryGet(path, fallback) {
-  try { return { data: await api(path), live: true }; }
+async function tryGet(path, fallback, opts = {}) {
+  try { return { data: await api(path, opts), live: true }; }
   catch (e) { return { data: fallback, live: false, error: String(e.message || e), status: e.status }; }
 }
 const srcTag = () => nothing;
@@ -162,6 +163,12 @@ function treeUrl(org, repo, ref, path = '') {
 }
 function blobUrl(org, repo, ref, path) {
   return hashUrl([org, repo, 'blob', ref, ...String(path).split('/').filter(Boolean)]);
+}
+function pullUrl(org, repo, n, tab) {
+  const extra = ['pulls', String(n)];
+  if (tab === 'files') extra.push('files');
+  else if (tab === 'conversation') extra.push('conversation');
+  return repoUrl(org, repo, extra);
 }
 function apiRef(ref) {
   return String(ref).split('/').map(encodeURIComponent).join('/');
@@ -512,15 +519,24 @@ function diffFilesFromMaps(baseMap, headMap) {
   return files;
 }
 
+function fileStatus(f) {
+  const s = String(f?.status || f?.op || f?.kind || '').toLowerCase();
+  if (['added', 'add', 'create', 'created', 'new'].includes(s)) return 'added';
+  if (['removed', 'remove', 'delete', 'deleted'].includes(s)) return 'removed';
+  return 'modified';
+}
+
 function lcsDiffLines(aLines, bLines) {
   const n = aLines.length;
   const m = bLines.length;
+  const out = [];
   if (n > 800 || m > 800 || n * m > 250000) {
-    return [
-      { t: 'meta', s: `@@ large file (${n} → ${m} lines) @@` },
-      ...aLines.slice(0, 30).map((s) => ({ t: 'del', s })),
-      ...bLines.slice(0, 30).map((s) => ({ t: 'add', s })),
-    ];
+    let oi = 1;
+    let ni = 1;
+    for (const s of aLines.slice(0, 40)) { out.push({ t: 'del', s, oldNo: oi, newNo: null }); oi += 1; }
+    for (const s of bLines.slice(0, 40)) { out.push({ t: 'add', s, oldNo: null, newNo: ni }); ni += 1; }
+    out.truncated = true;
+    return out;
   }
   const dp = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
   for (let i = n - 1; i >= 0; i -= 1) {
@@ -528,17 +544,181 @@ function lcsDiffLines(aLines, bLines) {
       dp[i][j] = aLines[i] === bLines[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
     }
   }
-  const out = [];
   let i = 0;
   let j = 0;
   while (i < n && j < m) {
-    if (aLines[i] === bLines[j]) { out.push({ t: 'ctx', s: aLines[i] }); i += 1; j += 1; }
-    else if (dp[i + 1][j] >= dp[i][j + 1]) { out.push({ t: 'del', s: aLines[i] }); i += 1; }
-    else { out.push({ t: 'add', s: bLines[j] }); j += 1; }
+    if (aLines[i] === bLines[j]) { out.push({ t: 'ctx', s: aLines[i], oldNo: i + 1, newNo: j + 1 }); i += 1; j += 1; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { out.push({ t: 'del', s: aLines[i], oldNo: i + 1, newNo: null }); i += 1; }
+    else { out.push({ t: 'add', s: bLines[j], oldNo: null, newNo: j + 1 }); j += 1; }
   }
-  while (i < n) { out.push({ t: 'del', s: aLines[i] }); i += 1; }
-  while (j < m) { out.push({ t: 'add', s: bLines[j] }); j += 1; }
+  while (i < n) { out.push({ t: 'del', s: aLines[i], oldNo: i + 1, newNo: null }); i += 1; }
+  while (j < m) { out.push({ t: 'add', s: bLines[j], oldNo: null, newNo: j + 1 }); j += 1; }
   return out;
+}
+
+function hunkifyDiff(lines, expanded = []) {
+  const n = lines.length;
+  if (!n) return [];
+  const vis = new Array(n).fill(false);
+  const isChange = (r) => r.t === 'add' || r.t === 'del';
+  let any = false;
+  for (let i = 0; i < n; i += 1) {
+    if (!isChange(lines[i])) continue;
+    any = true;
+    const lo = Math.max(0, i - DIFF_CONTEXT);
+    const hi = Math.min(n - 1, i + DIFF_CONTEXT);
+    for (let k = lo; k <= hi; k += 1) vis[k] = true;
+  }
+  if (!any) {
+    const hi = Math.min(n, DIFF_CONTEXT * 2);
+    for (let k = 0; k < hi; k += 1) vis[k] = true;
+  }
+  for (const range of expanded) {
+    const start = Math.max(0, Number(range[0]) || 0);
+    const end = Math.min(n, Number(range[1]) || 0);
+    for (let k = start; k < end; k += 1) vis[k] = true;
+  }
+  const out = [];
+  let i = 0;
+  while (i < n) {
+    if (vis[i]) {
+      out.push({ kind: 'line', i, row: lines[i] });
+      i += 1;
+    } else {
+      let j = i;
+      while (j < n && !vis[j]) j += 1;
+      out.push({ kind: 'gap', start: i, end: j, count: j - i });
+      i = j;
+    }
+  }
+  return out;
+}
+
+function splitHljsLines(html) {
+  const src = String(html ?? '');
+  const lines = [];
+  const stack = [];
+  let buf = '';
+  const re = /<\/?span\b[^>]*>|\n/gi;
+  let last = 0;
+  let m = re.exec(src);
+  while (m) {
+    buf += src.slice(last, m.index);
+    const tag = m[0];
+    if (tag === '\n') {
+      buf += '</span>'.repeat(stack.length);
+      lines.push(buf);
+      buf = stack.join('');
+    } else if (tag.startsWith('</')) {
+      if (stack.length) stack.pop();
+      buf += '</span>';
+    } else {
+      stack.push(tag);
+      buf += tag;
+    }
+    last = m.index + tag.length;
+    m = re.exec(src);
+  }
+  buf += src.slice(last);
+  lines.push(buf);
+  return lines;
+}
+
+async function highlightLines(path, text) {
+  const n = String(text ?? '').split('\n').length;
+  const lang = langFor(path);
+  if (!lang) return Array.from({ length: n }, () => null);
+  try {
+    const hljs = await loadHljs();
+    if (!hljs.getLanguage(lang)) return Array.from({ length: n }, () => null);
+    const html = hljs.highlight(text, { language: lang, ignoreIllegals: true }).value;
+    const lines = splitHljsLines(html);
+    while (lines.length < n) lines.push('');
+    if (lines.length > n) lines.length = n;
+    return lines;
+  } catch {
+    return Array.from({ length: n }, () => null);
+  }
+}
+
+async function highlightDiffRows(rows) {
+  await Promise.all((rows || []).map(async (row) => {
+    if (!row?.lines || row.skip) return;
+    try {
+      const [oldHl, newHl] = await Promise.all([
+        row.oldText != null ? highlightLines(row.path, row.oldText) : [],
+        row.newText != null ? highlightLines(row.path, row.newText) : [],
+      ]);
+      for (const ln of row.lines) {
+        if (ln.t === 'del' && ln.oldNo) ln.html = oldHl[ln.oldNo - 1] || null;
+        else if (ln.newNo) ln.html = newHl[ln.newNo - 1] || null;
+      }
+      row.highlighted = true;
+    } catch {
+      row.highlighted = false;
+    }
+  }));
+}
+
+function asNamedList(data, key) {
+  if (!data) return [];
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data[key])) return data[key];
+  return [];
+}
+
+function isGeneralComment(c) {
+  return c == null || c.path == null || c.path === '';
+}
+
+function lineComments(comments, path, line, side) {
+  return (comments || []).filter((c) => {
+    if (isGeneralComment(c)) return false;
+    if (String(c.path) !== String(path)) return false;
+    if (Number(c.line) !== Number(line)) return false;
+    return String(c.side || 'new').toLowerCase() === side;
+  });
+}
+
+function meIsPrAuthor(d) {
+  if (!getAuth()?.token) return false;
+  const id = getMe()?.user?.id;
+  if (id && d?.author_user_id && String(id) === String(d.author_user_id)) return true;
+  const name = meName();
+  return !!(name && (name === d?.author || name === d?.author_name));
+}
+
+function commentIsMine(c) {
+  const me = getMe()?.user;
+  const name = meName();
+  if (!me && !name) return false;
+  if (me?.id && (c.author_user_id === me.id || c.user_id === me.id || c.user === me.id)) return true;
+  return !!(name && (c.author === name || c.user === name || c.author_name === name));
+}
+
+function iApproved(approvals) {
+  const name = meName();
+  const id = getMe()?.user?.id;
+  return (approvals || []).some((a) => a.user === name || a.user === id || a.user_id === id || a.author === name);
+}
+
+async function loadPrFileBytes(org, repo, rev, path, pieceCid, size) {
+  if (rev) {
+    try {
+      const blob = await loadBlob(org, repo, rev, path);
+      if (blob?.bytes) return blob;
+      if (blob && !pieceCid) return blob;
+    } catch { /* try piece CID */ }
+  }
+  if (pieceCid) return bytesFromHint(org, repo, { pieceCid, size, length: size });
+  return { bytes: null, loc: {}, spError: 'no storage URL' };
+}
+
+function textFromBytes(bytes, path) {
+  if (!bytes) return { text: '', skip: 'empty' };
+  if (!isLikelyText(bytes, path)) return { text: '', skip: 'binary file' };
+  const slice = bytes.length > MAX_DIFF_BYTES ? bytes.subarray(0, MAX_DIFF_BYTES) : bytes;
+  return { text: decodeUtf8(slice), skip: '', truncated: bytes.length > MAX_DIFF_BYTES };
 }
 
 async function loadCompare(org, repo, baseRev, headRev) {
@@ -567,48 +747,61 @@ async function loadCompare(org, repo, baseRev, headRev) {
   return { source: 'changesets', files: diffFilesFromMaps(pcidMap(baseCs), pcidMap(headCs)), baseCs, headCs };
 }
 
+async function loadPullFileList(org, repo, n, pr) {
+  const b = `/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}`;
+  try {
+    const data = await api(`${b}/pulls/${encodeURIComponent(n)}/files`);
+    const files = (data.files || data.changes || []).map((f) => ({
+      path: f.path || f.filename || f.name,
+      status: fileStatus(f),
+      baseSize: f.baseSize ?? f.base_size,
+      headSize: f.headSize ?? f.head_size,
+      basePieceCid: f.basePieceCid || f.base_piece_cid,
+      headPieceCid: f.headPieceCid || f.head_piece_cid,
+    })).filter((f) => f.path);
+    return { source: 'pr-files', files, base: data.base, head: data.head };
+  } catch (e) {
+    const baseRev = pr?.base_target || pr?.base_ref || pr?.base || 'main';
+    const headRev = pr?.head_target || pr?.head_ref || pr?.head;
+    if (!headRev) throw new Error(e.message || 'missing head target');
+    const cmp = await loadCompare(org, repo, baseRev, headRev);
+    return {
+      ...cmp,
+      base: baseRev,
+      head: headRev,
+      files: (cmp.files || []).map((f) => ({ ...f, path: f.path || f.filename || f.name, status: fileStatus(f) })),
+    };
+  }
+}
+
 async function loadFileDiffs(org, repo, baseRev, headRev, files) {
   const slice = files.slice(0, MAX_DIFF_FILES);
   const rows = [];
   for (const f of slice) {
     const path = f.path;
     if (!path) continue;
-    const row = { ...f, lines: null, skip: '' };
-    if (f.status === 'removed') {
-      try {
-        const blob = await loadBlob(org, repo, baseRev, path);
-        if (!blob.bytes || !isLikelyText(blob.bytes, path)) { row.skip = 'binary or empty'; }
-        else {
-          const text = decodeUtf8(blob.bytes.subarray(0, MAX_DIFF_BYTES));
-          row.lines = text.split('\n').map((s) => ({ t: 'del', s }));
-        }
-      } catch (e) { row.skip = e.message; }
-    } else if (f.status === 'added') {
-      try {
-        const blob = await loadBlob(org, repo, headRev, path);
-        if (!blob.bytes || !isLikelyText(blob.bytes, path)) { row.skip = 'binary or empty'; }
-        else {
-          const text = decodeUtf8(blob.bytes.subarray(0, MAX_DIFF_BYTES));
-          row.lines = text.split('\n').map((s) => ({ t: 'add', s }));
-        }
-      } catch (e) { row.skip = e.message; }
-    } else {
-      try {
-        const [oldB, newB] = await Promise.all([
-          loadBlob(org, repo, baseRev, path).catch(() => null),
-          loadBlob(org, repo, headRev, path).catch(() => null),
-        ]);
-        const oldBytes = oldB?.bytes;
-        const newBytes = newB?.bytes;
-        if ((oldBytes && !isLikelyText(oldBytes, path)) || (newBytes && !isLikelyText(newBytes, path))) {
-          row.skip = 'binary file';
-        } else {
-          const oldT = oldBytes ? decodeUtf8(oldBytes.subarray(0, MAX_DIFF_BYTES)) : '';
-          const newT = newBytes ? decodeUtf8(newBytes.subarray(0, MAX_DIFF_BYTES)) : '';
-          row.lines = lcsDiffLines(oldT.split('\n'), newT.split('\n'));
-        }
-      } catch (e) { row.skip = e.message; }
-    }
+    const status = fileStatus(f);
+    const row = { ...f, path, status, lines: null, skip: '', oldText: null, newText: null };
+    try {
+      const [oldB, newB] = await Promise.all([
+        status === 'added' ? Promise.resolve(null) : loadPrFileBytes(org, repo, baseRev, path, f.basePieceCid, f.baseSize).catch(() => null),
+        status === 'removed' ? Promise.resolve(null) : loadPrFileBytes(org, repo, headRev, path, f.headPieceCid, f.headSize).catch(() => null),
+      ]);
+      const oldParsed = oldB?.bytes ? textFromBytes(oldB.bytes, path) : { text: '', skip: oldB?.spError || (status === 'added' ? '' : 'missing base') };
+      const newParsed = newB?.bytes ? textFromBytes(newB.bytes, path) : { text: '', skip: newB?.spError || (status === 'removed' ? '' : 'missing head') };
+      if (oldParsed.skip === 'binary file' || newParsed.skip === 'binary file') {
+        row.skip = 'binary file';
+      } else if (!oldB?.bytes && !newB?.bytes) {
+        row.skip = oldParsed.skip || newParsed.skip || 'could not fetch file bytes';
+      } else {
+        row.oldText = oldParsed.text;
+        row.newText = newParsed.text;
+        if (status === 'removed') row.lines = oldParsed.text.split('\n').map((s, i) => ({ t: 'del', s, oldNo: i + 1, newNo: null }));
+        else if (status === 'added') row.lines = newParsed.text.split('\n').map((s, i) => ({ t: 'add', s, oldNo: null, newNo: i + 1 }));
+        else row.lines = lcsDiffLines(oldParsed.text.split('\n'), newParsed.text.split('\n'));
+        if (oldParsed.truncated || newParsed.truncated) row.skip = (row.skip ? `${row.skip}; ` : '') + 'preview truncated';
+      }
+    } catch (e) { row.skip = e.message || String(e); }
     rows.push(row);
   }
   return { rows, truncated: files.length > MAX_DIFF_FILES, total: files.length };
@@ -997,6 +1190,20 @@ const RepoView = (org, repo, opts) => {
     ref: opts.ref || 'main',
     path: opts.path || '',
     pullNo: opts.pull || null,
+    prTab: opts.prTab || 'conversation',
+    comments: null,
+    approvals: null,
+    editing: false,
+    editTitle: '',
+    editBody: '',
+    editBusy: false,
+    convDraft: '',
+    convBusy: false,
+    inlineDraft: null,
+    inlineBusy: false,
+    expanded: {},
+    commentErr: '',
+    approveBusy: false,
   };
   const cloneCmd = `scn clone ${full}`;
 
@@ -1181,13 +1388,24 @@ const RepoView = (org, repo, opts) => {
     ${st.kind === 'blob' ? blobView() : html`${fileTable()}${readmeView()}`}
     ${cliPanel()}`;
 
+  function prApi(suffix, opts) {
+    return api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/pulls/${encodeURIComponent(st.pullNo)}${suffix}`, opts);
+  }
+
+  async function reloadComments() {
+    const s = await tryGet(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/pulls/${encodeURIComponent(st.pullNo)}/comments`, { comments: [] }, { auth: true });
+    st.comments = s;
+  }
+  async function reloadApprovals() {
+    const s = await tryGet(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/pulls/${encodeURIComponent(st.pullNo)}/approvals`, { approvals: [] }, { auth: true });
+    st.approvals = s;
+  }
+
   async function prAction(verb) {
     if (!st.pullNo || st.prBusy) return;
     st.prErr = ''; st.prBusy = verb; draw();
     try {
-      const data = await api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/pulls/${encodeURIComponent(st.pullNo)}/${verb}`, {
-        method: 'POST', auth: true, body: {},
-      });
+      const data = await prApi(`/${verb}`, { method: 'POST', auth: true, body: {} });
       st.pull = { live: true, data };
       st.prBusy = '';
       draw();
@@ -1198,48 +1416,283 @@ const RepoView = (org, repo, opts) => {
     }
   }
 
-  const pullsTab = () => {
-    if (st.pullNo) {
-      const p = st.pull;
-      if (!p) return html`<p class="muted">Loading pull request…</p>`;
-      if (!p.live) return html`<p class="muted">Could not load PR #${st.pullNo}: ${p.error}</p>`;
-      const d = p.data || {};
-      const state = d.state || 'open';
-      const author = d.author || d.author_name || 'unknown';
-      const head = d.head_ref || d.head || '';
-      const base = d.base_ref || d.base || 'main';
-      const open = state === 'open';
-      const canMerge = open && (getMe()?.user?.admin || st.membership?.admin || st.membership?.member || isOrgMember(org));
-      const canClose = open && (getMe()?.user?.admin || st.membership?.admin || meName() === author || getMe()?.user?.id === d.author_user_id);
-      const files = st.diff?.files || [];
-      return html`
-        <div class="pr-detail">
-          <p><a href=${repoUrl(org, repo, ['pulls'])}>← Pull requests</a></p>
-          <h2>#${d.number ?? st.pullNo} ${d.title || ''}</h2>
+  async function savePrEdit(e) {
+    e.preventDefault();
+    if (st.editBusy) return;
+    st.commentErr = ''; st.editBusy = true; draw();
+    try {
+      const data = await prApi('', { method: 'PATCH', auth: true, body: { title: st.editTitle, body: st.editBody } });
+      st.pull = { live: true, data: { ...(st.pull?.data || {}), ...data } };
+      st.editing = false;
+      st.editBusy = false;
+      draw();
+    } catch (err) {
+      st.commentErr = err.message || String(err);
+      st.editBusy = false;
+      draw();
+    }
+  }
+
+  async function postComment(payload) {
+    return prApi('/comments', { method: 'POST', auth: true, body: payload });
+  }
+
+  async function deleteComment(id) {
+    try {
+      await prApi(`/comments/${encodeURIComponent(id)}`, { method: 'DELETE', auth: true });
+    } catch (e) {
+      if (e.status === 404) {
+        await api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/comments/${encodeURIComponent(id)}`, { method: 'DELETE', auth: true });
+      } else throw e;
+    }
+  }
+
+  async function submitConvComment(e) {
+    e.preventDefault();
+    const body = (st.convDraft || '').trim();
+    if (!body || st.convBusy) return;
+    st.commentErr = ''; st.convBusy = true; draw();
+    try {
+      await postComment({ body });
+      st.convDraft = '';
+      await reloadComments();
+      st.convBusy = false;
+      draw();
+    } catch (err) {
+      st.commentErr = err.message || String(err);
+      st.convBusy = false;
+      draw();
+    }
+  }
+
+  async function submitInlineComment(e) {
+    e.preventDefault();
+    const draft = st.inlineDraft;
+    const body = (draft?.body || '').trim();
+    if (!draft || !body || st.inlineBusy) return;
+    st.commentErr = ''; st.inlineBusy = true; draw();
+    try {
+      await postComment({ body, path: draft.path, line: draft.line, side: draft.side });
+      st.inlineDraft = null;
+      await reloadComments();
+      st.inlineBusy = false;
+      draw();
+    } catch (err) {
+      st.commentErr = err.message || String(err);
+      st.inlineBusy = false;
+      draw();
+    }
+  }
+
+  async function onDeleteComment(id) {
+    st.commentErr = '';
+    try {
+      await deleteComment(id);
+      await reloadComments();
+      draw();
+    } catch (err) {
+      st.commentErr = err.message || String(err);
+      draw();
+    }
+  }
+
+  async function toggleApproval() {
+    if (st.approveBusy) return;
+    st.commentErr = ''; st.approveBusy = true; draw();
+    const mine = iApproved(asNamedList(st.approvals?.data, 'approvals'));
+    try {
+      await prApi('/approvals', { method: mine ? 'DELETE' : 'POST', auth: true, body: mine ? undefined : {} });
+      await reloadApprovals();
+      st.approveBusy = false;
+      draw();
+    } catch (err) {
+      st.commentErr = err.message || String(err);
+      st.approveBusy = false;
+      draw();
+    }
+  }
+
+  const commentBlock = (c) => html`
+    <div class="pr-comment">
+      <div class="pr-comment-meta">
+        <strong>${c.author || c.user || c.author_name || 'unknown'}</strong>
+        <span class="tiny-note">${fmtTime(c.created_at)}</span>
+        ${commentIsMine(c) && c.id ? html`<button class="btn btn-ghost btn-tiny" type="button" @click=${() => onDeleteComment(c.id)}>Delete</button>` : nothing}
+      </div>
+      <div class="pr-comment-body">${c.body || ''}</div>
+    </div>`;
+
+  const signInHint = () => html`<p class="tiny-note"><a href=${`/#/login?next=${encodeURIComponent(location.pathname + location.hash)}`}>Sign in to comment</a></p>`;
+
+  const conversationPane = (d) => {
+    const author = d.author || d.author_name || 'unknown';
+    const head = d.head_ref || d.head || '';
+    const base = d.base_ref || d.base || 'main';
+    const state = d.state || 'open';
+    const open = state === 'open';
+    const isAuthor = meIsPrAuthor(d);
+    const canMerge = open && (getMe()?.user?.admin || st.membership?.admin || st.membership?.member || isOrgMember(org));
+    const canClose = open && (getMe()?.user?.admin || st.membership?.admin || isAuthor);
+    const comments = asNamedList(st.comments?.data, 'comments').filter(isGeneralComment);
+    const approvals = asNamedList(st.approvals?.data, 'approvals');
+    const signedIn = !!getAuth()?.token;
+    const canApprove = signedIn && !isAuthor && open;
+    const approved = iApproved(approvals);
+    return html`
+      <div class="card pr-title-box">
+        ${st.editing ? html`
+          <form class="form" @submit=${savePrEdit}>
+            <label for="pr-edit-title">Title</label>
+            <input id="pr-edit-title" type="text" .value=${st.editTitle} @input=${(e) => { st.editTitle = e.target.value; }} required />
+            <label for="pr-edit-body">Description</label>
+            <textarea id="pr-edit-body" rows="8" .value=${st.editBody} @input=${(e) => { st.editBody = e.target.value; }}></textarea>
+            <div class="form-actions">
+              <button class="btn btn-primary" type="submit" ?disabled=${st.editBusy}>${st.editBusy ? 'Saving…' : 'Save'}</button>
+              <button class="btn" type="button" @click=${() => { st.editing = false; draw(); }}>Cancel</button>
+            </div>
+          </form>` : html`
+          <div class="pr-title-row">
+            <h2>#${d.number ?? st.pullNo} ${d.title || ''}</h2>
+            ${isAuthor ? html`<button class="btn" type="button" @click=${() => { st.editing = true; st.editTitle = d.title || ''; st.editBody = d.body || ''; draw(); }}>Edit</button>` : nothing}
+          </div>
           <div class="pr-meta-row">
             <span class="badge pr-state">${state}</span>
             <span>${author}</span>
             <span class="mono">${head} → ${base}</span>
             <span class="tiny-note">${fmtTime(d.created_at)}</span>
           </div>
-          ${d.body ? html`<div class="card md-body" style="margin-bottom:1rem">${(() => { const r = renderMarkdown(d.body, { org, repo, ref: head || st.ref, dir: '' }); return r.template; })()}</div>` : nothing}
-          ${open ? html`<div class="pr-actions">
-            ${canMerge ? html`<button class="btn btn-primary" type="button" ?disabled=${!!st.prBusy} @click=${() => prAction('merge')}>${st.prBusy === 'merge' ? 'Merging…' : 'Merge'}</button>` : nothing}
-            ${canClose ? html`<button class="btn" type="button" ?disabled=${!!st.prBusy} @click=${() => prAction('close')}>${st.prBusy === 'close' ? 'Closing…' : 'Close'}</button>` : nothing}
-            ${!canMerge && !canClose ? html`<p class="tiny-note">Sign in as an org member to merge, or as the author to close.</p>` : nothing}
-          </div>` : nothing}
-          ${st.prErr ? html`<p class="form-error">${st.prErr}</p>` : nothing}
-          <h3>Files</h3>
-          ${!st.diff ? html`<p class="muted">Loading diff…</p>`
-            : st.diff.error ? html`<p class="muted">Could not compare ${base} and ${head}: ${st.diff.error}</p>`
-            : html`
-              <ul class="diff-list">${files.map((f) => html`<li class="diff-item"><span class="st ${f.status === 'added' ? 'add' : f.status === 'removed' ? 'del' : 'mod'}">${f.status}</span><a href=${blobUrl(org, repo, d.head_target || head, f.path)}>${f.path}</a></li>`)}</ul>
-              ${st.diff.truncated ? html`<p class="tiny-note">Showing ${st.diff.rows?.length || 0} of ${st.diff.total} files.</p>` : nothing}
-              ${(st.diff.rows || []).map((row) => html`<div class="diff-file">
-                <h4>${row.path} <span class="tiny-note">${row.status}${row.skip ? ` · ${row.skip}` : ''}</span></h4>
-                ${row.lines ? html`<pre class="diff-hunk">${row.lines.map((ln) => html`<div class=${ln.t}>${ln.t === 'add' ? '+' : ln.t === 'del' ? '-' : ln.t === 'meta' ? '' : ' '}${ln.s}</div>`)}</pre>` : nothing}
-              </div>`)}
-            `}
+          ${d.body ? html`<div class="md-body">${(() => { const r = renderMarkdown(d.body, { org, repo, ref: head || st.ref, dir: '' }); return r.template; })()}</div>` : html`<p class="muted">No description.</p>`}
+        `}
+      </div>
+      <section class="pr-comments" aria-label="Conversation">
+        <h3>Comments</h3>
+        ${!st.comments ? html`<p class="muted">Loading comments…</p>`
+          : comments.length ? comments.map(commentBlock)
+          : html`<p class="muted">${st.comments.live === false && st.comments.status === 404 ? 'Comments are not available on this API yet.' : 'No comments yet.'}</p>`}
+        ${signedIn ? html`<form class="card form pr-add-comment" @submit=${submitConvComment}>
+          <label for="pr-conv-body">Add comment</label>
+          <textarea id="pr-conv-body" rows="4" @input=${(e) => { st.convDraft = e.target.value; }} .value=${st.convDraft}></textarea>
+          <div class="form-actions"><button class="btn btn-primary" type="submit" ?disabled=${st.convBusy || !(st.convDraft || '').trim()}>${st.convBusy ? 'Posting…' : 'Comment'}</button></div>
+        </form>` : signInHint()}
+      </section>
+      <section class="pr-approvals" aria-label="Approvals">
+        <h3>Approvals</h3>
+        ${!st.approvals ? html`<p class="muted">Loading approvals…</p>`
+          : approvals.length ? html`<ul class="pr-approval-list">${approvals.map((a) => html`<li><strong>${a.user || a.author || 'unknown'}</strong> <span class="tiny-note">${fmtTime(a.created_at)}</span></li>`)}</ul>`
+          : html`<p class="muted">${st.approvals.live === false && st.approvals.status === 404 ? 'Approvals are not available on this API yet.' : 'No approvals yet.'}</p>`}
+        ${canApprove ? html`<button class="btn ${approved ? '' : 'btn-primary'}" type="button" ?disabled=${st.approveBusy} @click=${toggleApproval}>${st.approveBusy ? 'Working…' : (approved ? 'Remove approval' : 'Approve')}</button>` : nothing}
+      </section>
+      ${open ? html`<div class="pr-actions">
+        ${canMerge ? html`<button class="btn btn-primary" type="button" ?disabled=${!!st.prBusy} @click=${() => prAction('merge')}>${st.prBusy === 'merge' ? 'Merging…' : 'Merge'}</button>` : nothing}
+        ${canClose ? html`<button class="btn" type="button" ?disabled=${!!st.prBusy} @click=${() => prAction('close')}>${st.prBusy === 'close' ? 'Closing…' : 'Close'}</button>` : nothing}
+        ${!canMerge && !canClose ? html`<p class="tiny-note">Sign in as an org member to merge, or as the author to close.</p>` : nothing}
+      </div>` : nothing}
+      ${st.prErr || st.commentErr ? html`<p class="form-error">${st.prErr || st.commentErr}</p>` : nothing}
+    `;
+  };
+
+  const inlineForm = (path, line, side) => {
+    const signedIn = !!getAuth()?.token;
+    if (!signedIn) return html`<tr class="comment-row"><td colspan="4">${signInHint()}</td></tr>`;
+    const draft = st.inlineDraft;
+    return html`<tr class="comment-row"><td colspan="4">
+      <form class="form pr-inline-form" @submit=${submitInlineComment}>
+        <textarea rows="3" placeholder="Comment" .value=${draft?.body || ''} @input=${(e) => { if (st.inlineDraft) st.inlineDraft.body = e.target.value; }}></textarea>
+        <div class="form-actions">
+          <button class="btn btn-primary" type="submit" ?disabled=${st.inlineBusy || !(draft?.body || '').trim()}>${st.inlineBusy ? 'Saving…' : 'Save'}</button>
+          <button class="btn" type="button" @click=${() => { st.inlineDraft = null; draw(); }}>Cancel</button>
+        </div>
+      </form>
+    </td></tr>`;
+  };
+
+  const diffLineRow = (filePath, ln) => {
+    const side = ln.t === 'del' ? 'old' : 'new';
+    const line = side === 'old' ? ln.oldNo : ln.newNo;
+    const mark = ln.t === 'add' ? '+' : ln.t === 'del' ? '-' : ' ';
+    const open = () => {
+      if (st.inlineDraft && st.inlineDraft.path === filePath && st.inlineDraft.line === line && st.inlineDraft.side === side) {
+        st.inlineDraft = null;
+      } else {
+        st.inlineDraft = { path: filePath, line, side, body: '' };
+      }
+      draw();
+    };
+    const code = ln.html != null && ln.html !== '' ? unsafeHTML(ln.html) : ln.s;
+    return html`<tr class=${`diff-line ${ln.t}`} @click=${open}>
+      <td class="ln old">${ln.oldNo || ''}</td>
+      <td class="ln new">${ln.newNo || ''}</td>
+      <td class="mark">${mark}</td>
+      <td class="src"><code class="hljs">${code}</code></td>
+    </tr>`;
+  };
+
+  const fileDiffView = (d, row) => {
+    const headRef = d.head_target || d.head_ref || d.head || st.ref;
+    const comments = asNamedList(st.comments?.data, 'comments');
+    const expanded = st.expanded[row.path] || [];
+    const hunks = row.lines ? hunkifyDiff(row.lines, expanded) : [];
+    const expand = (gap) => {
+      st.expanded[row.path] = [...(st.expanded[row.path] || []), [gap.start, gap.end]];
+      draw();
+    };
+    const blobHref = blobUrl(org, repo, headRef, row.path);
+    return html`<div class="diff-file">
+      <div class="diff-file-head">
+        <span class="st ${row.status === 'added' ? 'add' : row.status === 'removed' ? 'del' : 'mod'}">${row.status}</span>
+        <span class="diff-path">${row.path}</span>
+        <a href=${blobHref} target="_blank" rel="noopener">View full file</a>
+        ${row.skip ? html`<span class="tiny-note">${row.skip}</span>` : nothing}
+      </div>
+      ${row.lines ? html`<div class="diff-hunk-wrap"><table class="diff-table">
+        <tbody>${hunks.map((h) => {
+          if (h.kind === 'gap') {
+            return html`<tr class="gap"><td colspan="4"><button type="button" class="diff-expand" @click=${() => expand(h)}>Expand ${h.count} hidden line${h.count === 1 ? '' : 's'}</button></td></tr>`;
+          }
+          const ln = h.row;
+          const side = ln.t === 'del' ? 'old' : 'new';
+          const line = side === 'old' ? ln.oldNo : ln.newNo;
+          const cms = lineComments(comments, row.path, line, side);
+          const draft = st.inlineDraft;
+          const showForm = draft && draft.path === row.path && draft.line === line && draft.side === side;
+          return html`${diffLineRow(row.path, ln)}
+            ${cms.map((c) => html`<tr class="comment-row"><td colspan="4">${commentBlock(c)}</td></tr>`)}
+            ${showForm ? inlineForm(row.path, line, side) : nothing}`;
+        })}</tbody>
+      </table></div>` : html`<p class="tiny-note" style="padding:.6rem .8rem">${row.skip || 'No diff.'}</p>`}
+    </div>`;
+  };
+
+  const filesPane = (d) => {
+    const files = st.diff?.files || [];
+    const head = d.head_ref || d.head || '';
+    const base = d.base_ref || d.base || 'main';
+    return html`
+      ${!st.diff ? html`<p class="muted">Loading diff…</p>`
+        : st.diff.error ? html`<p class="muted">Could not load files (${base}…${head}): ${st.diff.error}</p>`
+        : html`
+          <ul class="diff-list">${files.map((f) => html`<li class="diff-item"><span class="st ${f.status === 'added' ? 'add' : f.status === 'removed' ? 'del' : 'mod'}">${f.status}</span>${f.path}</li>`)}</ul>
+          ${st.diff.truncated ? html`<p class="tiny-note">Showing ${st.diff.rows?.length || 0} of ${st.diff.total} files.</p>` : nothing}
+          ${(st.diff.rows || []).map((row) => fileDiffView(d, row))}
+        `}
+      ${st.commentErr ? html`<p class="form-error">${st.commentErr}</p>` : nothing}
+    `;
+  };
+
+  const pullsTab = () => {
+    if (st.pullNo) {
+      const p = st.pull;
+      if (!p) return html`<p class="muted">Loading pull request…</p>`;
+      if (!p.live) return html`<p class="muted">Could not load PR #${st.pullNo}: ${p.error}</p>`;
+      const d = p.data || {};
+      return html`
+        <div class="pr-detail">
+          <p><a href=${repoUrl(org, repo, ['pulls'])}>← Pull requests</a></p>
+          <nav class="pr-subtabs" aria-label="Pull request">
+            <a href=${pullUrl(org, repo, st.pullNo)} aria-current=${st.prTab !== 'files' ? 'page' : nothing}>Conversation</a>
+            <a href=${pullUrl(org, repo, st.pullNo, 'files')} aria-current=${st.prTab === 'files' ? 'page' : nothing}>Code</a>
+          </nav>
+          ${st.prTab === 'files' ? filesPane(d) : conversationPane(d)}
         </div>`;
     }
     const rows = pullList(st.pulls).filter((p) => (p.state || 'open') === 'open');
@@ -1299,15 +1752,25 @@ const RepoView = (org, repo, opts) => {
             rerender();
             if (!s?.live || !s.data) return;
             const d = s.data;
-            const baseRev = d.base_target || d.base_ref || d.base || 'main';
-            const headRev = d.head_target || d.head_ref || d.head;
-            if (!headRev) { st.diff = { files: [], error: 'missing head target' }; rerender(); return; }
-            try {
-              const cmp = await loadCompare(org, repo, baseRev, headRev);
-              st.diff = { files: cmp.files || [], source: cmp.source };
+            Promise.all([
+              tryGet(`${b}/pulls/${encodeURIComponent(st.pullNo)}/comments`, { comments: [] }, { auth: true }),
+              tryGet(`${b}/pulls/${encodeURIComponent(st.pullNo)}/approvals`, { approvals: [] }, { auth: true }),
+            ]).then(([c, a]) => {
+              st.comments = c;
+              st.approvals = a;
               rerender();
+            });
+            if (st.prTab !== 'files') return;
+            try {
+              const cmp = await loadPullFileList(org, repo, st.pullNo, d);
+              st.diff = { files: cmp.files || [], source: cmp.source, base: cmp.base, head: cmp.head };
+              rerender();
+              const baseRev = cmp.base || d.base_target || d.base_ref || d.base || 'main';
+              const headRev = cmp.head || d.head_target || d.head_ref || d.head;
               const loaded = await loadFileDiffs(org, repo, baseRev, headRev, cmp.files || []);
               st.diff = { ...st.diff, ...loaded };
+              rerender();
+              await highlightDiffRows(st.diff.rows || []);
             } catch (e) {
               st.diff = { files: [], error: e.message || String(e) };
             }
@@ -1475,7 +1938,18 @@ function drawChrome() {
     const [org, repo, kind, ref, ...rest] = parts;
     items.push(html`<a href=${orgUrl(org)}>${org}</a>`);
     if (repo) { items.push(sep()); items.push(html`<a href=${repoUrl(org, repo)}><strong>${repo}</strong></a>`); }
-    if (repo && kind === 'pulls') { items.push(sep()); items.push(html`<a href=${repoUrl(org, repo, ['pulls'])}>pulls</a>`); if (ref) { items.push(sep()); items.push(html`<span>#${ref}</span>`); } }
+    if (repo && kind === 'pulls') {
+      items.push(sep());
+      items.push(html`<a href=${repoUrl(org, repo, ['pulls'])}>pulls</a>`);
+      if (ref) {
+        items.push(sep());
+        items.push(html`<a href=${repoUrl(org, repo, ['pulls', ref])}>#${ref}</a>`);
+        if (rest[0] === 'files' || rest[0] === 'conversation') {
+          items.push(sep());
+          items.push(html`<span>${rest[0]}</span>`);
+        }
+      }
+    }
     if (repo && kind === 'sync') { items.push(sep()); items.push(html`<span>sync</span>`); }
     if (repo && (kind === 'tree' || kind === 'blob')) {
       if (ref && ref !== 'main') { items.push(html`<span class="ref-chip">${ref}</span>`); }
@@ -1548,7 +2022,9 @@ function routeFromParts(parts) {
   if (parts.length === 2) return Object.assign(RepoView(org, repo, { tab: 'code', kind: 'tree', ref: 'main', path: '' }), { title });
   const third = parts[2];
   if (third === 'pulls') {
-    return Object.assign(RepoView(org, repo, { tab: 'pulls', pull: parts[3] || null }), { title });
+    const n = parts[3] && /^\d+$/.test(parts[3]) ? parts[3] : null;
+    const prTab = n && parts[4] === 'files' ? 'files' : 'conversation';
+    return Object.assign(RepoView(org, repo, { tab: 'pulls', pull: n, prTab }), { title: n ? `${org}/${repo} #${n} — ScionBase` : title });
   }
   if (third === 'sync') {
     return Object.assign(RepoView(org, repo, { tab: 'sync' }), { title });
