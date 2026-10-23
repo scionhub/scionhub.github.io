@@ -761,6 +761,24 @@ function approvalIsOwner(a, owners) {
   return ownerNames(owners).includes(name);
 }
 
+const CHECK_ICON = { success: '✓', failure: '✗', error: '!', cancelled: '–', running: '●', queued: '○' };
+function fmtDuration(ms) {
+  if (ms == null) return '';
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.floor(ms / 60000)}m${String(Math.floor((ms % 60000) / 1000)).padStart(2, '0')}s`;
+}
+function checksRollup(list, required) {
+  const req = new Set(required || []);
+  const counts = {};
+  for (const c of list) counts[c.state] = (counts[c.state] || 0) + 1;
+  const missing = [...req].filter((n) => !list.some((c) => c.name === n));
+  const overall = list.some((c) => c.state === 'failure' || c.state === 'error') ? 'failure'
+    : list.some((c) => c.state === 'running' || c.state === 'queued') || missing.length ? 'running'
+    : list.length ? 'success' : 'none';
+  return { counts, missing, overall };
+}
+
 function formatMergeReason(reason) {
   const s = String(reason || '');
   if (!s) return s;
@@ -1031,6 +1049,53 @@ const Home = () => html`
     <p class="disclaimer center">Proof of concept: <strong>no real payment is taken</strong>. For pilots or production, contact <a href="https://filoz.org" target="_blank" rel="noopener">FilOz</a>.</p>
   </div></section>`;
 
+const CI_YML_EXAMPLE = `# .scionbase/ci.yml
+jobs:
+  vet:
+    runs-on: [linux, x64]      # runner must have every label
+    timeout: 300               # seconds for the whole job (default 600, max 3600)
+    steps:
+      - name: toolchain
+        run: go version
+      - name: go vet
+        run: go vet ./lib/promise/...
+  unit:
+    runs-on: linux
+    steps:
+      - name: tests
+        run: |
+          make deps
+          go test ./...`;
+
+const CiDocs = () => html`
+  <div class="page"><div class="container docs-content">
+    <h1>CI on ScionBase</h1>
+    <p>ScionBase runs CI on <strong>your own machines</strong> and shows the results on pull requests. There is no GitHub mirror and no hosted build farm: a small runner (<code>scn runner</code>) connects <em>outbound</em> over HTTPS, so it works behind a firewall or NAT with no open ports.</p>
+    <h2 id="how">How it works</h2>
+    <ol>
+      <li>When a pull request is opened or its branch is pushed, and on every push to <code>main</code>, ScionBase reads <code>.scionbase/ci.yml</code> <em>at that exact changeset</em> and queues one check per job.</li>
+      <li>A runner registered on the repo long-polls for queued jobs whose <code>runs-on</code> labels it has, clones that changeset with <code>scn clone --at</code>, runs each step with <code>bash -eo pipefail</code> in a fresh temp directory, streams the log back every few seconds, posts the final state, deletes the checkout, and polls again.</li>
+      <li>The PR page shows every check with its state, duration and log. Owners can re-run a job. Under <em>Settings → Required checks</em>, owners list job names that must be <code>success</code> on the PR head before it can merge.</li>
+    </ol>
+    <h2 id="yml">1. Add <code>.scionbase/ci.yml</code></h2>
+    <p>The format is deliberately small: <code>jobs: { name: { runs-on: [labels], steps: [ {name, run} ], timeout } }</code>. Job names use <code>[A-Za-z0-9_.-]</code>. Steps run in the repository root. The environment includes <code>CI=true</code>, <code>SCN_JOB</code>, <code>SCN_CHANGESET</code> and <code>SCN_REPO</code>.</p>
+    ${pre(CI_YML_EXAMPLE)}
+    <h2 id="runner">2. Register and start a runner</h2>
+    <p>As a repo owner, register a runner (or use <em>Settings → Runners</em> on the web). This saves a runner token to <code>~/.config/scn/runners/&lt;org&gt;__&lt;repo&gt;.json</code> with mode 600. The token can only claim and report jobs for that one repo.</p>
+    ${pre(['scn login --user <you>', 'scn runner register --repo <org>/<repo> --labels linux,x64', 'scn runner run --repo <org>/<repo>            # loops forever', 'scn runner run --repo <org>/<repo> --once     # one job, then exit', 'scn runner list --repo <org>/<repo>', 'scn runner remove <name> --repo <org>/<repo>'])}
+    <p class="tiny-note">Steps run as the user that runs <code>scn runner</code>, so use a dedicated account or a VM/container for untrusted pull requests. The runner strips <code>SCN_TOKEN</code>, <code>SCN_RUNNER_TOKEN</code> and <code>SCN_PASSWORD</code> from the step environment. To keep it running, use systemd, launchd or <code>tmux</code>.</p>
+    <h2 id="report">3. Report results from any script</h2>
+    <p>Already have a CI system, such as a GitHub Actions job, Jenkins or a cron script? Push its results into ScionBase with <code>scn ci report</code>. It needs a repo owner's login, <code>SCN_TOKEN</code>, or a runner token in <code>SCN_RUNNER_TOKEN</code>.</p>
+    ${pre(['scn ci report lint --pr 3 --state success --summary "0 warnings"', 'scn ci report e2e --changeset <64-hex> --state failure --log e2e.log --url https://ci.example.com/run/42', 'scn ci report nightly --ref main --state success'])}
+    <p>States: <code>queued</code>, <code>running</code>, <code>success</code>, <code>failure</code>, <code>error</code>, <code>cancelled</code>. Only the last 1 MB of a log is kept.</p>
+    <h2 id="inspect">4. Inspect and re-run</h2>
+    ${pre(['scn ci list --pr 3', 'scn ci log vet --pr 3', 'scn ci rerun vet --pr 3          # owners; ci.yml jobs only'])}
+    <h2 id="completion">Shell completion</h2>
+    <p><code>scn completion bash|zsh|fish</code> includes <code>ci</code> and <code>runner</code> and their flags.</p>
+    <h2 id="api">HTTP API</h2>
+    ${pre(['GET  /v1/repos/{org}/{repo}/checks?pr=N | ?changeset=X | ?ref=main', 'POST /v1/repos/{org}/{repo}/checks            {name, state, pr|changeset|ref, summary, log, target_url}', 'GET  /v1/repos/{org}/{repo}/checks/{id}/log', 'POST /v1/repos/{org}/{repo}/checks/rerun      {name, pr|changeset}', 'GET|POST /v1/repos/{org}/{repo}/runners       (owners)', 'DELETE   /v1/repos/{org}/{repo}/runners/{name}', 'POST /v1/runners/poll                          (runner token, long-poll)', 'PATCH /v1/runners/jobs/{id}                    {state, log_append, summary}'])}
+  </div></div>`;
+
 const GettingStarted = () => html`
   <div class="page"><div class="container docs-content">
     <h1>CLI guide</h1>
@@ -1280,6 +1345,10 @@ const RepoView = (org, repo, opts) => {
     deleteBusy: false,
     deleteErr: '',
     mergeability: null,
+    checks: null,
+    checkOpen: {},
+    checkLogs: {},
+    checkBusy: '',
     openResolved: new Set(),
   };
   const cloneCmd = `scn clone ${full}`;
@@ -1733,6 +1802,7 @@ const RepoView = (org, repo, opts) => {
           <div class="form-actions"><button class="btn btn-primary" type="submit" ?disabled=${st.convBusy || !(st.convDraft || '').trim()}>${st.convBusy ? 'Posting…' : 'Comment'}</button></div>
         </form>` : signInHint()}
       </section>
+      ${checksSection(false)}
       <section class="pr-approvals" aria-label="Approvals">
         <h3>Approvals</h3>
         <p class="merge-note">Only approvals from repository owners other than the author count toward merge. Required: ${needApprovals}.</p>
@@ -1858,6 +1928,90 @@ const RepoView = (org, repo, opts) => {
     `;
   };
 
+  async function loadChecks() {
+    if (!st.pullNo) return;
+    const b = `/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}`;
+    st.checks = await tryGet(`${b}/checks?pr=${encodeURIComponent(st.pullNo)}`, null);
+    for (const id of Object.keys(st.checkOpen)) if (st.checkOpen[id]) loadCheckLog(id, true);
+    draw();
+    clearTimeout(st.checksTimer);
+    const list = st.checks?.data?.checks || [];
+    if (list.some((c) => c.state === 'queued' || c.state === 'running') && location.hash.includes(`/pulls/${st.pullNo}`)) {
+      st.checksTimer = setTimeout(loadChecks, 4000);
+    }
+  }
+  async function loadCheckLog(id, quiet) {
+    const b = `/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}`;
+    try {
+      const r = await fetch(`${API}${b}/checks/${encodeURIComponent(id)}/log`);
+      st.checkLogs[id] = r.ok ? await r.text() : `could not load log (${r.status})`;
+    } catch (e) { st.checkLogs[id] = `could not load log: ${e.message}`; }
+    if (!quiet) draw();
+  }
+  function toggleCheck(id) {
+    st.checkOpen[id] = !st.checkOpen[id];
+    if (st.checkOpen[id] && st.checkLogs[id] == null) loadCheckLog(id);
+    draw();
+  }
+  async function rerunCheck(name) {
+    st.checkBusy = name; draw();
+    try {
+      await api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/checks/rerun`, { method: 'POST', auth: true, body: { name, pr: Number(st.pullNo) } });
+      for (const c of st.checks?.data?.checks || []) if (c.name === name) { delete st.checkLogs[c.id]; }
+    } catch (e) { st.prErr = e.message || String(e); }
+    st.checkBusy = '';
+    await loadChecks();
+    try { st.mergeability = await tryGet(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/pulls/${encodeURIComponent(st.pullNo)}/mergeability`, null, { auth: true }); } catch { /* ignore */ }
+    draw();
+  }
+  const checksSummaryLine = () => {
+    const data = st.checks?.data;
+    if (!st.checks) return html`<span class="tiny-note">Loading checks…</span>`;
+    if (!st.checks.live || !data) return nothing;
+    const list = data.checks || [];
+    const { counts, missing, overall } = checksRollup(list, data.required);
+    if (!list.length && !missing.length) return html`<span class="tiny-note">No checks</span>`;
+    const parts = ['success', 'failure', 'error', 'running', 'queued', 'cancelled'].filter((k) => counts[k]).map((k) => `${counts[k]} ${k}`);
+    if (missing.length) parts.push(`${missing.length} required not reported`);
+    return html`<span class="checks-rollup check-${overall}"><span class="check-icon">${CHECK_ICON[overall === 'none' ? 'queued' : overall] || '○'}</span> Checks: ${parts.join(', ')}</span>`;
+  };
+  const checksSection = (compact) => {
+    const data = st.checks?.data;
+    const owner = isViewerOwner();
+    const list = data?.checks || [];
+    const required = new Set(data?.required || []);
+    const missing = [...required].filter((n) => !list.some((c) => c.name === n));
+    return html`<section class="pr-checks ${compact ? 'compact' : ''}" aria-label="Checks">
+      <div class="checks-head"><h3>Checks</h3> ${checksSummaryLine()}
+        ${data ? html`<span class="tiny-note mono" title=${data.changeset}>on ${String(data.changeset).slice(0, 12)}</span>` : nothing}</div>
+      ${!st.checks ? nothing
+        : !st.checks.live ? html`<p class="muted">Checks are not available on this API yet.</p>`
+        : !list.length && !missing.length ? html`<p class="muted">No checks on this changeset. Add <code>.scionbase/ci.yml</code> and a runner, or push results with <code>scn ci report</code>. <a href="/#/ci">How CI works</a>.</p>`
+        : html`<ul class="check-list">
+          ${list.map((c) => html`<li class="check-item check-${c.state}">
+            <div class="check-row">
+              <button class="check-toggle" type="button" aria-expanded=${st.checkOpen[c.id] ? 'true' : 'false'} @click=${() => toggleCheck(c.id)}>
+                <span class="check-icon" aria-label=${c.state}>${CHECK_ICON[c.state] || '?'}</span>
+                <strong>${c.name}</strong>
+                ${required.has(c.name) ? html`<span class="owner-badge">required</span>` : nothing}
+                <span class="check-state">${c.state}</span>
+                ${c.summary ? html`<span class="check-summary">${c.summary}</span>` : nothing}
+              </button>
+              <span class="check-meta">
+                ${c.duration_ms != null ? html`<span>${fmtDuration(c.duration_ms)}</span>` : nothing}
+                ${c.runner ? html`<span class="tiny-note">on ${c.runner}</span>` : c.reported_by ? html`<span class="tiny-note">by ${c.reported_by}</span>` : nothing}
+                ${c.attempt > 1 ? html`<span class="tiny-note">attempt ${c.attempt}</span>` : nothing}
+                ${c.target_url ? html`<a href=${c.target_url} target="_blank" rel="noopener">details</a>` : nothing}
+                ${owner && c.rerunnable && c.state !== 'queued' && c.state !== 'running' ? html`<button class="btn btn-tiny" type="button" ?disabled=${st.checkBusy === c.name} @click=${() => rerunCheck(c.name)}>${st.checkBusy === c.name ? 'Queuing…' : 'Re-run'}</button>` : nothing}
+              </span>
+            </div>
+            ${st.checkOpen[c.id] ? html`<pre class="check-log"><code>${st.checkLogs[c.id] == null ? 'Loading log…' : (st.checkLogs[c.id] || '(empty log)')}</code></pre>` : nothing}
+          </li>`)}
+          ${missing.map((n) => html`<li class="check-item check-missing"><div class="check-row"><span class="check-toggle"><span class="check-icon">○</span> <strong>${n}</strong> <span class="owner-badge">required</span> <span class="check-state">not reported yet</span></span></div></li>`)}
+        </ul>`}
+    </section>`;
+  };
+
   const pullsTab = () => {
     if (st.pullNo) {
       const p = st.pull;
@@ -1871,7 +2025,7 @@ const RepoView = (org, repo, opts) => {
             <a href=${pullUrl(org, repo, st.pullNo)} aria-current=${st.prTab !== 'files' ? 'page' : nothing}>Conversation</a>
             <a href=${pullUrl(org, repo, st.pullNo, 'files')} aria-current=${st.prTab === 'files' ? 'page' : nothing}>Code</a>
           </nav>
-          ${st.prTab === 'files' ? filesPane(d) : conversationPane(d)}
+          ${st.prTab === 'files' ? html`<div class="pr-code-checks">${checksSection(true)}</div>${filesPane(d)}` : conversationPane(d)}
         </div>`;
     }
     const rows = pullList(st.pulls).filter((p) => (p.state || 'open') === 'open');
@@ -1950,9 +2104,56 @@ const RepoView = (org, repo, opts) => {
     if (st.repoSettingsLoading) return;
     st.repoSettingsLoading = true;
     st.repoSettings = await tryGet(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/settings`, null, { auth: true });
-    st.repoSettingsDraft = st.repoSettings?.data ? { ...st.repoSettings.data } : null;
+    st.repoSettingsDraft = st.repoSettings?.data ? { ...st.repoSettings.data, checksText: (st.repoSettings.data.requiredChecks || []).join(', ') } : null;
+    draw();
+    loadRunners();
+  }
+  async function loadRunners() {
+    st.runners = await tryGet(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/runners`, { runners: [] }, { auth: true });
     draw();
   }
+  async function registerRunner(e) {
+    e.preventDefault();
+    st.runnerBusy = true; st.runnerErr = ''; st.runnerNew = null; draw();
+    try {
+      const labels = (st.runnerLabels || 'linux').split(',').map((x) => x.trim()).filter(Boolean);
+      st.runnerNew = await api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/runners`, { method: 'POST', auth: true, body: { name: (st.runnerName || '').trim() || undefined, labels } });
+      st.runnerName = '';
+    } catch (err) { st.runnerErr = err?.message || String(err); }
+    st.runnerBusy = false;
+    await loadRunners();
+  }
+  async function removeRunner(name) {
+    if (!confirm(`Remove runner ${name}? Its token stops working.`)) return;
+    try { await api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/runners/${encodeURIComponent(name)}`, { method: 'DELETE', auth: true }); }
+    catch (err) { st.runnerErr = err?.message || String(err); }
+    await loadRunners();
+  }
+  const runnersSection = () => {
+    const list = st.runners?.data?.runners || [];
+    const now = Date.now();
+    const ago = (t) => { if (!t) return 'never'; const s = Math.round((now - t) / 1000); return s < 90 ? `${s}s ago` : s < 5400 ? `${Math.round(s / 60)} min ago` : s < 172800 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} d ago`; };
+    return html`<section aria-label="Runners">
+      <h3>Runners</h3>
+      <p class="tiny-note">Your own machines that run <code>.scionbase/ci.yml</code> jobs. They connect outbound only. <a href="/#/ci">Setup guide</a></p>
+      ${!st.runners ? html`<p class="muted">Loading runners…</p>`
+        : list.length ? html`<ul class="owner-list">${list.map((r) => html`<li>
+            <span><strong>${r.name}</strong> <span class="mono tiny-note">${(r.labels || []).join(', ')}</span>
+              <span class="tiny-note">last seen ${ago(r.last_seen)} · added by ${r.created_by}</span></span>
+            <button class="btn btn-ghost btn-tiny" type="button" @click=${() => removeRunner(r.name)}>Remove</button>
+          </li>`)}</ul>`
+        : html`<p class="muted">No runners registered.</p>`}
+      <form class="form owner-add" @submit=${registerRunner}>
+        <label for="runner-name">Name <input id="runner-name" type="text" placeholder="build-box" .value=${st.runnerName || ''} @input=${(e) => { st.runnerName = e.target.value; }} /></label>
+        <label for="runner-labels">Labels <input id="runner-labels" type="text" placeholder="linux,x64" .value=${st.runnerLabels ?? 'linux,x64'} @input=${(e) => { st.runnerLabels = e.target.value; }} /></label>
+        <button class="btn btn-primary" type="submit" ?disabled=${st.runnerBusy}>${st.runnerBusy ? 'Registering…' : 'Register runner'}</button>
+      </form>
+      ${st.runnerNew ? html`<div class="card runner-token"><p><strong>Runner ${st.runnerNew.name} registered.</strong> Copy this token now; it is shown once.</p>
+        ${pre([`mkdir -p ~/.config/scn/runners && umask 077 && cat > ~/.config/scn/runners/${org}__${repo}.json <<'EOF'`, JSON.stringify({ server: API, repo: `${org}/${repo}`, id: st.runnerNew.id, name: st.runnerNew.name, labels: st.runnerNew.labels, token: st.runnerNew.token }), 'EOF', `scn runner run --repo ${org}/${repo}`])}
+        <p class="tiny-note">Or skip the web flow and run <code>scn runner register --repo ${org}/${repo} --labels linux,x64</code> on the machine.</p></div>` : nothing}
+      ${st.runnerErr ? html`<p class="form-error">${st.runnerErr}</p>` : nothing}
+    </section>`;
+  };
   async function saveRepoSettings(e) {
     e.preventDefault();
     const dr = st.repoSettingsDraft; if (!dr) return;
@@ -1960,8 +2161,9 @@ const RepoView = (org, repo, opts) => {
     if (!(n >= 1 && n <= 10)) { st.settingsErr = 'Required approvals must be between 1 and 10.'; draw(); return; }
     st.settingsBusy = true; st.settingsErr = ''; st.settingsMsg = ''; draw();
     try {
-      const r = await api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/settings`, { method: 'PUT', auth: true, body: { protectMain: !!dr.protectMain, requiredApprovals: n } });
-      st.repoSettings = { live: true, data: r }; st.repoSettingsDraft = { ...r }; st.settingsMsg = 'Saved.';
+      const requiredChecks = String(dr.checksText || '').split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
+      const r = await api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/settings`, { method: 'PUT', auth: true, body: { protectMain: !!dr.protectMain, requiredApprovals: n, requiredChecks } });
+      st.repoSettings = { live: true, data: r }; st.repoSettingsDraft = { ...r, checksText: (r.requiredChecks || []).join(', ') }; st.settingsMsg = 'Saved.';
     } catch (err) { st.settingsErr = err?.message || String(err); }
     st.settingsBusy = false; draw();
   }
@@ -1999,11 +2201,15 @@ const RepoView = (org, repo, opts) => {
             <span class="tiny-note">Owner approvals needed before a pull request can merge. The author's own approval never counts.</span></label>
           <input id="req-approvals" type="number" min="1" max="10" step="1" style="max-width:6rem" .value=${String(dr.requiredApprovals)}
             @input=${(e) => { dr.requiredApprovals = e.target.value; }} />
+          <label for="req-checks"><strong>Required checks</strong><br>
+            <span class="tiny-note">CI job names (comma-separated) that must be <code>success</code> on the PR head before merge. Leave empty for none.</span></label>
+          <input id="req-checks" type="text" placeholder="vet, unit" .value=${dr.checksText || ''} @input=${(e) => { dr.checksText = e.target.value; }} />
           <div class="form-actions"><button class="btn btn-primary" type="submit" ?disabled=${st.settingsBusy}>${st.settingsBusy ? 'Saving…' : 'Save rules'}</button>
             ${st.settingsMsg ? html`<span class="tiny-note">${st.settingsMsg}</span>` : nothing}</div>
         </form>`; })()}
         ${st.settingsErr ? html`<p class="form-error">${st.settingsErr}</p>` : nothing}
       </section>
+      ${runnersSection()}
       <section aria-label="Owners">
         <h3>Owners</h3>
         ${!st.owners ? html`<p class="muted">Loading owners…</p>`
@@ -2050,7 +2256,7 @@ const RepoView = (org, repo, opts) => {
     ${conflictSample()}
     <p>Remove the markers, keep the resolved contents, then:</p>
     ${pre(['scn push -m "merge main"', `scn pr create --title "My change"`, `scn pr merge 1`])}
-    <p class="tiny-note"><a href="/#/getting-started">Full getting-started guide</a></p>`;
+    <p class="tiny-note"><a href="/#/getting-started">Full getting-started guide</a> · <a href="/#/ci">CI on ScionBase</a></p>`;
 
   const view = () => html`
     <div class="page"><div class="container">
@@ -2099,6 +2305,7 @@ const RepoView = (org, repo, opts) => {
               st.mergeability = m;
               rerender();
             });
+            loadChecks();
             if (st.prTab !== 'files') return;
             try {
               const cmp = await loadPullFileList(org, repo, st.pullNo, d);
@@ -2265,14 +2472,14 @@ function drawChrome() {
   document.body.classList.toggle('is-home', isHome);
   const mk = document.getElementById('marketing-nav');
   if (mk) {
-    render(isHome ? html`<li><a href="/#problem">Why</a></li><li><a href="/#start">Get started</a></li><li><a href="/#download">Download CLI</a></li><li><a href="/#pricing">Pricing</a></li>` : nothing, mk);
+    render(isHome ? html`<li><a href="/#problem">Why</a></li><li><a href="/#start">Get started</a></li><li><a href="/#download">Download CLI</a></li><li><a href="/#pricing">Pricing</a></li><li><a href="/#/ci">CI</a></li>` : nothing, mk);
   }
   const el = document.getElementById('crumbs');
   if (!el) return;
   const items = [];
   const sep = () => html`<span class="sep">/</span>`;
-  if (parts[0] === 'orgs' || parts[0] === 'login' || parts[0] === 'new' || parts[0] === 'getting-started' || parts[0] === 'cli') {
-    const label = { orgs: 'orgs', login: 'sign in', new: 'new repository', 'getting-started': 'getting started', cli: 'download CLI' }[parts[0]];
+  if (parts[0] === 'orgs' || parts[0] === 'login' || parts[0] === 'new' || parts[0] === 'getting-started' || parts[0] === 'cli' || parts[0] === 'ci') {
+    const label = { orgs: 'orgs', login: 'sign in', new: 'new repository', 'getting-started': 'getting started', cli: 'download CLI', ci: 'CI' }[parts[0]];
     items.push(html`<span>${label}</span>`);
   } else if (parts.length >= 1) {
     const [org, repo, kind, ref, ...rest] = parts;
@@ -2348,6 +2555,7 @@ function parseLocation() {
 function routeFromParts(parts) {
   if (parts.length === 0) return { view: Home, title: 'ScionBase' };
   if (parts.length === 1 && parts[0] === 'getting-started') return { view: GettingStarted, title: 'Getting started — ScionBase' };
+  if ((parts.length === 1 && parts[0] === 'ci') || (parts[0] === 'docs' && parts[1] === 'ci')) return { view: CiDocs, title: 'CI on ScionBase' };
   if (parts.length === 1 && parts[0] === 'cli') return { view: CliView, title: 'Download the CLI — ScionBase' };
   if (parts.length === 1 && parts[0] === 'orgs') return Object.assign(OrgsView(), { title: 'Organizations — ScionBase' });
   if (parts.length === 1 && parts[0] === 'login') return LoginView();

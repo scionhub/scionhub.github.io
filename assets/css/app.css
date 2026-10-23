@@ -218,3 +218,27 @@ body:not(.is-home) .nav-toggle { display:none; }
   #marketing-nav { display: none !important; }
   .topbar-crumbs { font-size: .85rem; }
 }
+
+/* CI checks */
+.pr-checks { margin: 1rem 0; }
+.pr-checks .checks-head { display:flex; align-items:baseline; gap:.75rem; flex-wrap:wrap; }
+.pr-checks .checks-head h3 { margin:0; }
+.check-list { list-style:none; margin:.5rem 0 0; padding:0; border:1px solid var(--border); border-radius:.6rem; overflow:hidden; }
+.check-item { border-top:1px solid var(--border); }
+.check-item:first-child { border-top:0; }
+.check-row { display:flex; align-items:center; justify-content:space-between; gap:.75rem; padding:.45rem .7rem; }
+.check-toggle { all:unset; cursor:pointer; display:flex; align-items:center; gap:.5rem; flex-wrap:wrap; min-width:0; }
+.check-toggle:focus-visible { outline:2px solid var(--accent); border-radius:.3rem; }
+.check-icon { display:inline-flex; width:1.25rem; height:1.25rem; align-items:center; justify-content:center; border-radius:50%; font-size:.8rem; font-weight:700; color:#fff; background:#6e7781; flex:none; }
+.check-success .check-icon { background:#1a7f37; }
+.check-failure .check-icon, .check-error .check-icon { background:#cf222e; }
+.check-running .check-icon { background:#bf8700; animation: checkpulse 1.2s ease-in-out infinite; }
+.check-queued .check-icon, .check-missing .check-icon { background:#8c959f; }
+@keyframes checkpulse { 50% { opacity:.45; } }
+.check-state { font-size:.8rem; text-transform:uppercase; letter-spacing:.03em; opacity:.75; }
+.check-summary { font-size:.88rem; opacity:.85; }
+.check-meta { display:flex; align-items:center; gap:.6rem; font-size:.85rem; white-space:nowrap; }
+.check-log { margin:0; max-height:24rem; overflow:auto; background:#0d1117; color:#e6edf3; padding:.7rem .9rem; font-size:.8rem; border-top:1px solid var(--border); white-space:pre-wrap; }
+.checks-rollup { display:inline-flex; align-items:center; gap:.4rem; font-size:.9rem; }
+.pr-code-checks { margin-bottom:1rem; }
+.runner-token { margin-top:.75rem; }
