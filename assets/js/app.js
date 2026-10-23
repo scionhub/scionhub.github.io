@@ -988,6 +988,7 @@ const RepoView = (org, repo, opts) => {
     copied: false,
     cliTab: 'Clone',
     diff: null,
+    membership: null,
     prBusy: '',
     prErr: '',
     tab: opts.tab || 'code',
@@ -1207,8 +1208,8 @@ const RepoView = (org, repo, opts) => {
       const head = d.head_ref || d.head || '';
       const base = d.base_ref || d.base || 'main';
       const open = state === 'open';
-      const canMerge = open && (getMe()?.user?.admin || isOrgMember(org));
-      const canClose = open && (getMe()?.user?.admin || meName() === author || getMe()?.user?.id === d.author_user_id);
+      const canMerge = open && (getMe()?.user?.admin || st.membership?.admin || st.membership?.member || isOrgMember(org));
+      const canClose = open && (getMe()?.user?.admin || st.membership?.admin || meName() === author || getMe()?.user?.id === d.author_user_id);
       const files = st.diff?.files || [];
       return html`
         <div class="pr-detail">
@@ -1285,7 +1286,12 @@ const RepoView = (org, repo, opts) => {
         rerender();
       });
       if (st.tab === 'pulls') {
-        if (getAuth()?.token) refreshMe();
+        if (getAuth()?.token) {
+          refreshMe();
+          api(`/v1/orgs/${encodeURIComponent(org)}/membership`, { auth: true })
+            .then((m) => { st.membership = m; rerender(); })
+            .catch(() => {});
+        }
         if (st.pullNo) {
           tryGet(`${b}/pulls/${encodeURIComponent(st.pullNo)}`, null).then(async (s) => {
             st.pull = s;
