@@ -645,13 +645,14 @@ async function highlightDiffRows(rows) {
   await Promise.all((rows || []).map(async (row) => {
     if (!row?.lines || row.skip) return;
     try {
-      const [oldHl, newHl] = await Promise.all([
-        row.oldText != null ? highlightLines(row.path, row.oldText) : [],
-        row.newText != null ? highlightLines(row.path, row.newText) : [],
-      ]);
+      // Syntax-color only the head (new) file once, then slice per-line HTML
+      // onto added and context rows. Removed lines stay plain escaped text.
+      // Comment blocks are separate <tr>s and never enter this pass.
+      const newHl = row.newText != null ? await highlightLines(row.path, row.newText) : [];
       for (const ln of row.lines) {
-        if (ln.t === 'del' && ln.oldNo) ln.html = oldHl[ln.oldNo - 1] || null;
-        else if (ln.newNo) ln.html = newHl[ln.newNo - 1] || null;
+        if (ln.t === 'del') ln.html = null;
+        else if ((ln.t === 'add' || ln.t === 'ctx') && ln.newNo) ln.html = newHl[ln.newNo - 1] || null;
+        else ln.html = null;
       }
       row.highlighted = true;
     } catch {
@@ -696,10 +697,40 @@ function commentIsMine(c) {
   return !!(name && (c.author === name || c.user === name || c.author_name === name));
 }
 
+function commentIsResolved(c) {
+  return c?.resolved === true || c?.resolved === 1 || c?.resolved === 'true';
+}
+
+function commentCanResolve(c, pull) {
+  if (!getAuth()?.token) return false;
+  return commentIsMine(c) || meIsPrAuthor(pull);
+}
+
 function iApproved(approvals) {
   const name = meName();
   const id = getMe()?.user?.id;
   return (approvals || []).some((a) => a.user === name || a.user === id || a.user_id === id || a.author === name);
+}
+
+function ownerNames(owners) {
+  return (owners || []).map((o) => o.user || o.user_name || o.name).filter(Boolean);
+}
+
+function approvalIsOwner(a, owners) {
+  if (a?.owner === true) return true;
+  if (a?.owner === false) return false;
+  const name = a?.user || a?.author || a?.user_name;
+  if (!name) return false;
+  return ownerNames(owners).includes(name);
+}
+
+function formatMergeReason(reason) {
+  const s = String(reason || '');
+  if (!s) return s;
+  if (s === 'at least one owner approval is required' || /owner approval is required/i.test(s)) {
+    return 'Needs approval from a repo owner';
+  }
+  return s;
 }
 
 async function loadPrFileBytes(org, repo, rev, path, pieceCid, size) {
@@ -1204,6 +1235,15 @@ const RepoView = (org, repo, opts) => {
     expanded: {},
     commentErr: '',
     approveBusy: false,
+    owners: null,
+    ownerDraft: '',
+    ownerBusy: false,
+    ownerErr: '',
+    deleteConfirm: '',
+    deleteBusy: false,
+    deleteErr: '',
+    mergeability: null,
+    openResolved: new Set(),
   };
   const cloneCmd = `scn clone ${full}`;
 
@@ -1392,6 +1432,15 @@ const RepoView = (org, repo, opts) => {
     return api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/pulls/${encodeURIComponent(st.pullNo)}${suffix}`, opts);
   }
 
+  function isViewerOwner() {
+    const viewer = st.info?.data?.viewer;
+    if (viewer && typeof viewer.owner === 'boolean') return viewer.owner === true;
+    const name = meName();
+    if (name && ownerNames(asNamedList(st.owners?.data, 'owners')).includes(name)) return true;
+    const owned = getMe()?.ownedRepos || [];
+    return owned.some((r) => r && r.org === org && (r.name === repo || r.repo === repo));
+  }
+
   async function reloadComments() {
     const s = await tryGet(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/pulls/${encodeURIComponent(st.pullNo)}/comments`, { comments: [] }, { auth: true });
     st.comments = s;
@@ -1399,6 +1448,21 @@ const RepoView = (org, repo, opts) => {
   async function reloadApprovals() {
     const s = await tryGet(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/pulls/${encodeURIComponent(st.pullNo)}/approvals`, { approvals: [] }, { auth: true });
     st.approvals = s;
+  }
+  async function reloadMergeability() {
+    if (!st.pullNo) return;
+    st.mergeability = await tryGet(
+      `/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/pulls/${encodeURIComponent(st.pullNo)}/mergeability`,
+      null,
+      { auth: true }
+    );
+  }
+  async function reloadOwners() {
+    st.owners = await tryGet(
+      `/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/owners`,
+      { owners: [] },
+      { auth: true }
+    );
   }
 
   async function prAction(verb) {
@@ -1408,9 +1472,11 @@ const RepoView = (org, repo, opts) => {
       const data = await prApi(`/${verb}`, { method: 'POST', auth: true, body: {} });
       st.pull = { live: true, data };
       st.prBusy = '';
+      if (verb === 'merge') await reloadMergeability();
       draw();
     } catch (e) {
-      st.prErr = e.message || String(e);
+      const reasons = Array.isArray(e.data?.reasons) ? e.data.reasons.map(formatMergeReason) : [];
+      st.prErr = reasons.length ? `${e.message || 'merge blocked'}: ${reasons.join('; ')}` : (e.message || String(e));
       st.prBusy = '';
       draw();
     }
@@ -1456,6 +1522,7 @@ const RepoView = (org, repo, opts) => {
       await postComment({ body });
       st.convDraft = '';
       await reloadComments();
+      await reloadMergeability();
       st.convBusy = false;
       draw();
     } catch (err) {
@@ -1475,6 +1542,7 @@ const RepoView = (org, repo, opts) => {
       await postComment({ body, path: draft.path, line: draft.line, side: draft.side });
       st.inlineDraft = null;
       await reloadComments();
+      await reloadMergeability();
       st.inlineBusy = false;
       draw();
     } catch (err) {
@@ -1489,6 +1557,21 @@ const RepoView = (org, repo, opts) => {
     try {
       await deleteComment(id);
       await reloadComments();
+      await reloadMergeability();
+      draw();
+    } catch (err) {
+      st.commentErr = err.message || String(err);
+      draw();
+    }
+  }
+
+  async function toggleResolved(c, resolved) {
+    if (!c?.id) return;
+    st.commentErr = '';
+    try {
+      await prApi(`/comments/${encodeURIComponent(c.id)}`, { method: 'PATCH', auth: true, body: { resolved } });
+      await reloadComments();
+      await reloadMergeability();
       draw();
     } catch (err) {
       st.commentErr = err.message || String(err);
@@ -1503,6 +1586,7 @@ const RepoView = (org, repo, opts) => {
     try {
       await prApi('/approvals', { method: mine ? 'DELETE' : 'POST', auth: true, body: mine ? undefined : {} });
       await reloadApprovals();
+      await reloadMergeability();
       st.approveBusy = false;
       draw();
     } catch (err) {
@@ -1512,15 +1596,34 @@ const RepoView = (org, repo, opts) => {
     }
   }
 
-  const commentBlock = (c) => html`
-    <div class="pr-comment">
+  const commentBlock = (c) => {
+    const resolved = commentIsResolved(c);
+    const canResolve = commentCanResolve(c, st.pull?.data);
+    const expanded = !resolved || st.openResolved.has(c.id);
+    const toggleOpen = (e) => {
+      e.preventDefault();
+      if (st.openResolved.has(c.id)) st.openResolved.delete(c.id);
+      else st.openResolved.add(c.id);
+      draw();
+    };
+    return html`
+    <div class=${`pr-comment${resolved ? ' is-resolved' : ''}${resolved && !expanded ? ' is-collapsed' : ''}`}>
       <div class="pr-comment-meta">
         <strong>${c.author || c.user || c.author_name || 'unknown'}</strong>
         <span class="tiny-note">${fmtTime(c.created_at)}</span>
+        ${resolved && !expanded ? html`<span class="tiny-note">Resolved comment</span>` : nothing}
+        ${resolved ? html`<button class="btn btn-ghost btn-tiny" type="button" @click=${toggleOpen}>${expanded ? 'Hide' : 'Show'}</button>` : nothing}
+        <label class="resolve-toggle">
+          <input type="checkbox" .checked=${resolved} ?disabled=${!canResolve || !c.id}
+            @click=${(e) => e.stopPropagation()}
+            @change=${(e) => { e.stopPropagation(); toggleResolved(c, e.target.checked); }} />
+          Resolved
+        </label>
         ${commentIsMine(c) && c.id ? html`<button class="btn btn-ghost btn-tiny" type="button" @click=${() => onDeleteComment(c.id)}>Delete</button>` : nothing}
       </div>
-      <div class="pr-comment-body">${c.body || ''}</div>
+      ${expanded ? html`<div class="pr-comment-body">${c.body || ''}</div>` : nothing}
     </div>`;
+  };
 
   const signInHint = () => html`<p class="tiny-note"><a href=${`/#/login?next=${encodeURIComponent(location.pathname + location.hash)}`}>Sign in to comment</a></p>`;
 
@@ -1531,13 +1634,28 @@ const RepoView = (org, repo, opts) => {
     const state = d.state || 'open';
     const open = state === 'open';
     const isAuthor = meIsPrAuthor(d);
-    const canMerge = open && (getMe()?.user?.admin || st.membership?.admin || st.membership?.member || isOrgMember(org));
+    const viewer = st.info?.data?.viewer;
+    const canMerge = open && (viewer && typeof viewer.canMerge === 'boolean'
+      ? viewer.canMerge
+      : (getMe()?.user?.admin || st.membership?.admin || st.membership?.member || isOrgMember(org) || isViewerOwner()));
     const canClose = open && (getMe()?.user?.admin || st.membership?.admin || isAuthor);
     const comments = asNamedList(st.comments?.data, 'comments').filter(isGeneralComment);
     const approvals = asNamedList(st.approvals?.data, 'approvals');
+    const owners = asNamedList(st.owners?.data, 'owners');
     const signedIn = !!getAuth()?.token;
     const canApprove = signedIn && !isAuthor && open;
     const approved = iApproved(approvals);
+    const ownerApprovals = approvals.filter((a) => approvalIsOwner(a, owners));
+    const mergeLive = st.mergeability?.live === true && st.mergeability.data;
+    const mergeBlocked = mergeLive && st.mergeability.data.mergeable === false;
+    const mergeReasons = mergeLive
+      ? (st.mergeability.data.reasons || []).map(formatMergeReason)
+      : [];
+    if (mergeLive && !mergeReasons.length && mergeBlocked) {
+      const n = st.mergeability.data.unresolvedComments;
+      if (st.mergeability.data.ownerApprovals === 0) mergeReasons.push('Needs approval from a repo owner');
+      if (n > 0) mergeReasons.push(n === 1 ? '1 unresolved comment' : `${n} unresolved comments`);
+    }
     return html`
       <div class="card pr-title-box">
         ${st.editing ? html`
@@ -1577,16 +1695,24 @@ const RepoView = (org, repo, opts) => {
       </section>
       <section class="pr-approvals" aria-label="Approvals">
         <h3>Approvals</h3>
+        <p class="merge-note">Only approvals from repository owners count toward merge.</p>
         ${!st.approvals ? html`<p class="muted">Loading approvals…</p>`
-          : approvals.length ? html`<ul class="pr-approval-list">${approvals.map((a) => html`<li><strong>${a.user || a.author || 'unknown'}</strong> <span class="tiny-note">${fmtTime(a.created_at)}</span></li>`)}</ul>`
+          : approvals.length ? html`<ul class="pr-approval-list">${approvals.map((a) => html`<li>
+              <strong>${a.user || a.author || 'unknown'}</strong>
+              ${approvalIsOwner(a, owners) ? html`<span class="owner-badge">owner</span>` : nothing}
+              <span class="tiny-note">${fmtTime(a.created_at)}</span>
+            </li>`)}</ul>`
           : html`<p class="muted">${st.approvals.live === false && st.approvals.status === 404 ? 'Approvals are not available on this API yet.' : 'No approvals yet.'}</p>`}
+        ${ownerApprovals.length ? html`<p class="tiny-note">${ownerApprovals.length} owner approval${ownerApprovals.length === 1 ? '' : 's'}</p>` : nothing}
         ${canApprove ? html`<button class="btn ${approved ? '' : 'btn-primary'}" type="button" ?disabled=${st.approveBusy} @click=${toggleApproval}>${st.approveBusy ? 'Working…' : (approved ? 'Remove approval' : 'Approve')}</button>` : nothing}
       </section>
       ${open ? html`<div class="pr-actions">
-        ${canMerge ? html`<button class="btn btn-primary" type="button" ?disabled=${!!st.prBusy} @click=${() => prAction('merge')}>${st.prBusy === 'merge' ? 'Merging…' : 'Merge'}</button>` : nothing}
+        ${canMerge ? html`<button class="btn btn-primary" type="button" ?disabled=${!!st.prBusy || mergeBlocked} @click=${() => prAction('merge')}>${st.prBusy === 'merge' ? 'Merging…' : 'Merge'}</button>` : nothing}
         ${canClose ? html`<button class="btn" type="button" ?disabled=${!!st.prBusy} @click=${() => prAction('close')}>${st.prBusy === 'close' ? 'Closing…' : 'Close'}</button>` : nothing}
         ${!canMerge && !canClose ? html`<p class="tiny-note">Sign in as an org member to merge, or as the author to close.</p>` : nothing}
-      </div>` : nothing}
+      </div>
+      ${mergeBlocked && mergeReasons.length ? html`<ul class="merge-reasons">${mergeReasons.map((r) => html`<li>${r}</li>`)}</ul>` : nothing}
+      ${st.mergeability?.live === false && st.mergeability.status === 404 ? html`<p class="tiny-note">Mergeability checks are not available on this API yet.</p>` : nothing}` : nothing}
       ${st.prErr || st.commentErr ? html`<p class="form-error">${st.prErr || st.commentErr}</p>` : nothing}
     `;
   };
@@ -1618,12 +1744,13 @@ const RepoView = (org, repo, opts) => {
       }
       draw();
     };
-    const code = ln.html != null && ln.html !== '' ? unsafeHTML(ln.html) : ln.s;
+    const highlighted = ln.t !== 'del' && ln.html != null && ln.html !== '';
+    const code = highlighted ? unsafeHTML(ln.html) : ln.s;
     return html`<tr class=${`diff-line ${ln.t}`} @click=${open}>
       <td class="ln old">${ln.oldNo || ''}</td>
       <td class="ln new">${ln.newNo || ''}</td>
       <td class="mark">${mark}</td>
-      <td class="src"><code class="hljs">${code}</code></td>
+      <td class="src"><code class=${highlighted ? 'hljs' : ''}>${code}</code></td>
     </tr>`;
   };
 
@@ -1644,6 +1771,7 @@ const RepoView = (org, repo, opts) => {
       const cms = lineComments(comments, row.path, line, side);
       const draft = st.inlineDraft;
       const showForm = draft && draft.path === row.path && draft.line === line && draft.side === side;
+      // Comment blocks are sibling rows, never inside the code cell / highlight pass.
       return html`${diffLineRow(row.path, ln)}
         ${cms.map((c) => html`<tr class="comment-row"><td colspan="4"><div class="pr-sticky">${commentBlock(c)}</div></td></tr>`)}
         ${showForm ? inlineForm(row.path, line, side) : nothing}`;
@@ -1719,6 +1847,122 @@ const RepoView = (org, repo, opts) => {
       ${cliPanel()}`;
   };
 
+  async function addOwner(e) {
+    e.preventDefault();
+    const username = (st.ownerDraft || '').trim();
+    if (!username || st.ownerBusy) return;
+    st.ownerErr = ''; st.deleteErr = ''; st.ownerBusy = true; draw();
+    try {
+      await api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/owners`, {
+        method: 'POST', auth: true, body: { username },
+      });
+      st.ownerDraft = '';
+      await reloadOwners();
+      st.ownerBusy = false;
+      draw();
+    } catch (err) {
+      st.ownerErr = err.message || String(err);
+      st.ownerBusy = false;
+      draw();
+    }
+  }
+
+  async function removeOwner(username) {
+    if (!username || st.ownerBusy) return;
+    st.ownerErr = ''; st.deleteErr = ''; st.ownerBusy = true; draw();
+    try {
+      await api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/owners/${encodeURIComponent(username)}`, {
+        method: 'DELETE', auth: true,
+      });
+      await reloadOwners();
+      st.ownerBusy = false;
+      draw();
+    } catch (err) {
+      st.ownerErr = err.message || String(err);
+      st.ownerBusy = false;
+      draw();
+    }
+  }
+
+  async function deleteRepo(e) {
+    e.preventDefault();
+    const confirm = (st.deleteConfirm || '');
+    if (confirm !== full || st.deleteBusy) return;
+    st.deleteErr = ''; st.ownerErr = ''; st.deleteBusy = true; draw();
+    try {
+      await api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}`, {
+        method: 'DELETE', auth: true, body: { confirm },
+      });
+      st.deleteBusy = false;
+      navigate(orgUrl(org));
+    } catch (err) {
+      st.deleteErr = err.message || String(err);
+      st.deleteBusy = false;
+      draw();
+    }
+  }
+
+  const settingsTab = () => {
+    if (!getAuth()?.token) {
+      return html`<h2 style="margin-top:0">Settings</h2>
+        <p>Sign in as a repository owner to manage settings.</p>
+        <p><a class="btn btn-primary" href=${`/#/login?next=${encodeURIComponent(location.pathname + location.hash)}`}>Sign in</a></p>`;
+    }
+    const ownersMissing = st.owners?.live === false && (st.owners.status === 404 || st.owners.status === 405);
+    const viewerMissing = !st.info?.data?.viewer;
+    if (!st.info || (st.owners == null && viewerMissing)) {
+      return html`<p class="muted">Loading settings…</p>`;
+    }
+    if (!isViewerOwner()) {
+      if (ownersMissing && viewerMissing) {
+        return html`<h2 style="margin-top:0">Settings</h2>
+          <p class="muted">Repository settings are not available on this API yet.</p>`;
+      }
+      return html`<h2 style="margin-top:0">Settings</h2>
+        <p>Only repository owners can view these settings.</p>`;
+    }
+    const owners = asNamedList(st.owners?.data, 'owners');
+    const confirmOk = st.deleteConfirm === full;
+    return html`
+      <h2 style="margin-top:0">Settings</h2>
+      <section aria-label="Owners">
+        <h3>Owners</h3>
+        ${!st.owners ? html`<p class="muted">Loading owners…</p>`
+          : ownersMissing ? html`<p class="muted">Owner management is not available on this API yet.</p>`
+          : owners.length ? html`<ul class="owner-list">${owners.map((o) => html`<li>
+              <span><strong>${o.user || o.user_name || 'unknown'}</strong>
+                ${o.added_by ? html`<span class="tiny-note">added by ${o.added_by}</span>` : nothing}
+              </span>
+              <button class="btn btn-ghost btn-tiny" type="button" ?disabled=${st.ownerBusy || owners.length <= 1}
+                @click=${() => removeOwner(o.user || o.user_name)}>Remove</button>
+            </li>`)}</ul>`
+          : html`<p class="muted">No owners listed.</p>`}
+        ${ownersMissing ? nothing : html`<form class="form owner-add" @submit=${addOwner}>
+          <label for="add-owner">Add owner
+            <input id="add-owner" type="text" autocomplete="username" placeholder="username"
+              pattern="[a-z0-9][a-z0-9-]{2,31}" .value=${st.ownerDraft}
+              @input=${(e) => { st.ownerDraft = e.target.value; draw(); }} />
+          </label>
+          <button class="btn btn-primary" type="submit" ?disabled=${st.ownerBusy || !(st.ownerDraft || '').trim()}>${st.ownerBusy ? 'Working…' : 'Add owner'}</button>
+        </form>`}
+        ${st.ownerErr ? html`<p class="form-error">${st.ownerErr}</p>` : nothing}
+      </section>
+      <section class="danger-zone" aria-label="Danger zone">
+        <h2>Danger zone</h2>
+        <p>Filecoin storage is append-only: deleting removes this repository from listings, its refs and metadata. Stored pieces remain on Filecoin and are not deleted.</p>
+        <form class="form" @submit=${deleteRepo}>
+          <label for="delete-confirm">Type <code>${full}</code> to confirm</label>
+          <input id="delete-confirm" class="confirm-input" type="text" autocomplete="off" spellcheck="false"
+            .value=${st.deleteConfirm} @input=${(e) => { st.deleteConfirm = e.target.value; draw(); }} />
+          <div class="form-actions">
+            <button class="btn btn-danger" type="submit" ?disabled=${!confirmOk || st.deleteBusy}>${st.deleteBusy ? 'Deleting…' : 'Delete repository'}</button>
+          </div>
+        </form>
+        ${st.deleteErr ? html`<p class="form-error">${st.deleteErr}</p>` : nothing}
+      </section>
+    `;
+  };
+
   const syncTab = () => html`
     <h2 style="margin-top:0">Pull and merge</h2>
     <p><code>scn pull</code> updates the working copy. <code>scn merge &lt;ref&gt;</code> three-way-merges with a target ref. Both-changed paths get git-style markers; push refuses while markers remain.</p>
@@ -1735,15 +1979,19 @@ const RepoView = (org, repo, opts) => {
         <a href=${repoUrl(org, repo)} aria-current=${st.tab === 'code' ? 'page' : nothing}>Code</a>
         <a href=${repoUrl(org, repo, ['pulls'])} aria-current=${st.tab === 'pulls' ? 'page' : nothing}>Pull requests</a>
         <a href=${repoUrl(org, repo, ['sync'])} aria-current=${st.tab === 'sync' ? 'page' : nothing}>Sync</a>
+        ${isViewerOwner() ? html`<a href=${repoUrl(org, repo, ['settings'])} aria-current=${st.tab === 'settings' ? 'page' : nothing}>Settings</a>` : nothing}
       </nav>
-      ${st.tab === 'pulls' ? pullsTab() : st.tab === 'sync' ? syncTab() : codeTab()}
+      ${st.tab === 'pulls' ? pullsTab() : st.tab === 'sync' ? syncTab() : st.tab === 'settings' ? settingsTab() : codeTab()}
     </div></div>`;
 
   return {
     view,
     load: async (rerender) => {
       const b = `/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}`;
-      tryGet(b, { org, name: repo, visibility: 'public' }).then((s) => { st.info = s; rerender(); });
+      const authed = !!getAuth()?.token;
+      tryGet(b, { org, name: repo, visibility: 'public' }, { auth: authed }).then((s) => { st.info = s; rerender(); });
+      tryGet(`${b}/owners`, { owners: [] }, { auth: authed }).then((s) => { st.owners = s; rerender(); });
+      if (authed) refreshMe();
       tryGet(`${b}/branches`, { branches: [{ name: 'main', target: '' }] }).then((s) => {
         if (s.live && !s.data.branches) s.data = { branches: s.data };
         st.branches = s;
@@ -1765,9 +2013,11 @@ const RepoView = (org, repo, opts) => {
             Promise.all([
               tryGet(`${b}/pulls/${encodeURIComponent(st.pullNo)}/comments`, { comments: [] }, { auth: true }),
               tryGet(`${b}/pulls/${encodeURIComponent(st.pullNo)}/approvals`, { approvals: [] }, { auth: true }),
-            ]).then(([c, a]) => {
+              tryGet(`${b}/pulls/${encodeURIComponent(st.pullNo)}/mergeability`, null, { auth: true }),
+            ]).then(([c, a, m]) => {
               st.comments = c;
               st.approvals = a;
+              st.mergeability = m;
               rerender();
             });
             if (st.prTab !== 'files') return;
@@ -1791,6 +2041,7 @@ const RepoView = (org, repo, opts) => {
         }
         return;
       }
+      if (st.tab === 'settings') return;
       if (st.tab !== 'code') return;
       loadCommits(org, repo, st.ref).then((c) => { st.commits = c; rerender(); }).catch(() => {});
       if (st.kind === 'blob' && st.path) {
@@ -1961,6 +2212,7 @@ function drawChrome() {
       }
     }
     if (repo && kind === 'sync') { items.push(sep()); items.push(html`<span>sync</span>`); }
+    if (repo && kind === 'settings') { items.push(sep()); items.push(html`<span>settings</span>`); }
     if (repo && (kind === 'tree' || kind === 'blob')) {
       if (ref && ref !== 'main') { items.push(html`<span class="ref-chip">${ref}</span>`); }
       rest.forEach((seg, i) => {
@@ -2038,6 +2290,9 @@ function routeFromParts(parts) {
   }
   if (third === 'sync') {
     return Object.assign(RepoView(org, repo, { tab: 'sync' }), { title });
+  }
+  if (third === 'settings') {
+    return Object.assign(RepoView(org, repo, { tab: 'settings' }), { title: `${org}/${repo} settings — ScionBase` });
   }
   if (third === 'tree' || third === 'blob') {
     const ref = parts[3] || 'main';
