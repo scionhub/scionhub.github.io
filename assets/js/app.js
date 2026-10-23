@@ -4,6 +4,10 @@
 // work on any static host without a fallback.
 import { html, render, nothing } from 'https://cdn.jsdelivr.net/npm/lit-html@3/lit-html.js';
 import { unsafeHTML } from 'https://cdn.jsdelivr.net/npm/lit-html@3/directives/unsafe-html.js';
+import { marked } from 'https://cdn.jsdelivr.net/npm/marked@15/+esm';
+import purifyNs from 'https://cdn.jsdelivr.net/npm/dompurify@3/+esm';
+
+const DOMPurify = purifyNs?.default || purifyNs;
 
 const API = (window.SCIONBASE_API_BASE || 'https://openscion-filecoin-poc.jolly-bush-400d.workers.dev').replace(/\/$/, '');
 const FALLBACK = { orgs: ['filecoin-project'], repos: { 'filecoin-project': ['curio', 'lotus'] } };
@@ -11,22 +15,99 @@ const DATASET = '46121';
 const AUTH_KEY = 'scionbase.auth';
 const OLD_AUTH_KEY = ['scion','hub.auth'].join('');
 try { const o = localStorage.getItem(OLD_AUTH_KEY); if (o && !localStorage.getItem(AUTH_KEY)) localStorage.setItem(AUTH_KEY, o); localStorage.removeItem(OLD_AUTH_KEY); } catch {}
-const ENV = `alias opnscn='opnscn --server ${API}'`;
+const ENV = `export SCN_SERVER=${API}`;
+const RELEASE_TAG = 'scn-v0.1.0';
+const RELEASE_PAGE = `https://github.com/scionhub/openscion/releases/tag/${RELEASE_TAG}`;
+const RELEASE_ASSET = 'scn-x86_64-unknown-linux-gnu.tar.gz';
+const RELEASE_ASSET_URL = `https://github.com/scionhub/openscion/releases/download/${RELEASE_TAG}/${RELEASE_ASSET}`;
 const README_NAMES = ['README.md', 'README', 'readme.md', 'Readme.md'];
 const MAX_BLOB_BYTES = 512 * 1024;
 const MAX_BLOB_LINES = 4000;
+const MAX_DIFF_FILES = 40;
+const MAX_DIFF_BYTES = 120 * 1024;
 const REPO_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const USER_RE = /^[a-z0-9][a-z0-9-]{2,31}$/;
+const ORG_NAME_RE = /^[a-z0-9][a-z0-9-]{2,31}$/;
 
 /* ---------- auth ---------- */
 function getAuth() {
   try { return JSON.parse(localStorage.getItem(AUTH_KEY) || 'null'); }
   catch { return null; }
 }
+let meState = { data: null, loading: false, error: '' };
+function getMe() { return meState.data; }
 function setAuth(value) {
   if (value) localStorage.setItem(AUTH_KEY, JSON.stringify(value));
   else localStorage.removeItem(AUTH_KEY);
-  drawNav();
+  meState = { data: null, loading: false, error: '' };
+  if (value?.token) refreshMe();
+  else drawNav();
+}
+async function refreshMe() {
+  const a = getAuth();
+  if (!a?.token) {
+    meState = { data: null, loading: false, error: '' };
+    drawNav();
+    return null;
+  }
+  meState.loading = true;
+  try {
+    const data = await api('/v1/me', { auth: true });
+    const user = data?.user || {};
+    meState = { data, loading: false, error: '' };
+    if (user.name && user.name !== a.username) {
+      localStorage.setItem(AUTH_KEY, JSON.stringify({ ...a, username: user.name }));
+    }
+    drawNav();
+    draw();
+    return data;
+  } catch (e) {
+    meState = {
+      data: { user: { id: a.username, name: a.username, admin: false }, orgs: [] },
+      loading: false,
+      error: e.message || String(e),
+    };
+    drawNav();
+    return meState.data;
+  }
+}
+function meName() {
+  return getMe()?.user?.name || getAuth()?.username || '';
+}
+function orgRole(org) {
+  const me = getMe();
+  if (!me) return '';
+  if (me.user?.admin) return 'admin';
+  for (const o of me.orgs || []) {
+    const id = typeof o === 'string' ? o : o.id || o.name;
+    if (id === org) return String(o.role || o.membership || (o.can_write ? 'member' : '') || '').toLowerCase();
+  }
+  return '';
+}
+function isOrgMember(org) {
+  const role = orgRole(org);
+  return role === 'member' || role === 'admin' || role === 'owner' || role === 'write';
+}
+function ownerChoices() {
+  const auth = getAuth();
+  const me = getMe();
+  const out = [];
+  const seen = new Set();
+  const add = (id, role) => {
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    out.push({ id, role: role || '' });
+  };
+  const username = me?.user?.name || auth?.username;
+  if (username) add(username, 'you');
+  for (const o of me?.orgs || []) {
+    const id = typeof o === 'string' ? o : o.id || o.name;
+    const role = String(typeof o === 'string' ? 'member' : (o.role || '')).toLowerCase();
+    if (id === 'filecoin-project' && !me?.user?.admin) continue;
+    if (role && !['member', 'admin', 'owner', 'write', ''].includes(role)) continue;
+    add(id, role);
+  }
+  return out;
 }
 
 /* ---------- http ---------- */
@@ -98,6 +179,11 @@ function shortId(id) {
   const s = String(id || '');
   return s.length > 12 ? s.slice(0, 8) : s;
 }
+function entrySize(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const n = entry.size ?? entry.bytes ?? entry.length ?? entry.size_bytes;
+  return n == null || n === '' ? null : n;
+}
 function fmtSize(n) {
   if (n == null || n === '') return '';
   const v = Number(n);
@@ -139,98 +225,96 @@ async function copyText(text) {
   }
 }
 
-let mdBase = null;
-function repoRelHref(u) {
-  if (!mdBase || /^[a-z][a-z0-9+.-]*:/i.test(u) || u.startsWith('/') || u.startsWith('#')) return null;
+function resolveRepoPath(u, dir) {
+  const hash = u.includes('#') ? u.slice(u.indexOf('#')) : '';
   const clean = u.split('#')[0].split('?')[0];
-  const segs = (mdBase.dir ? mdBase.dir.split('/') : []);
-  for (const seg of clean.split('/')) { if (seg === '..') segs.pop(); else if (seg && seg !== '.') segs.push(seg); }
-  const path = segs.join('/');
-  return clean.endsWith('/') ? treeUrl(mdBase.org, mdBase.repo, mdBase.ref, path) : blobUrl(mdBase.org, mdBase.repo, mdBase.ref, path);
+  const segs = (dir ? dir.split('/') : []).filter(Boolean);
+  for (const seg of clean.split('/')) {
+    if (seg === '..') segs.pop();
+    else if (seg && seg !== '.') segs.push(seg);
+  }
+  return { path: segs.join('/'), hash, trailingSlash: clean.endsWith('/') };
 }
-function safeHref(url) {
-  const u = String(url || '').trim();
-  if (!u) return null;
-  const rel = repoRelHref(u);
-  if (rel) return rel;
-  if (u.startsWith('/') || u.startsWith('#') || u.startsWith('mailto:')) return u;
+function absHttp(url) {
   try {
-    const parsed = new URL(u, location.href);
+    const parsed = new URL(url, location.href);
     if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return parsed.href;
   } catch { /* ignore */ }
   return null;
 }
-
-function inlineMd(text) {
-  const out = [];
-  const re = /(`[^`]+`)|\[([^\]]+)\]\(([^)]+)\)/g;
-  let last = 0;
-  let m;
-  while ((m = re.exec(text))) {
-    if (m.index > last) out.push(text.slice(last, m.index));
-    if (m[1]) out.push(html`<code>${m[1].slice(1, -1)}</code>`);
-    else {
-      const href = safeHref(m[3]);
-      if (href) out.push(html`<a href=${href} rel="noopener">${m[2]}</a>`);
-      else out.push(m[0]);
-    }
-    last = m.index + m[0].length;
-  }
-  if (last < text.length) out.push(text.slice(last));
-  return out;
+function mimeFromPath(path) {
+  const ext = (String(path).split('.').pop() || '').toLowerCase();
+  return ({
+    png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
+    webp: 'image/webp', svg: 'image/svg+xml', ico: 'image/x-icon', bmp: 'image/bmp',
+  })[ext] || 'application/octet-stream';
 }
 
-function renderMarkdown(src) {
-  const lines = String(src ?? '').replace(/\r\n/g, '\n').split('\n');
-  const blocks = [];
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-    if (line.startsWith('```')) {
-      const fence = [];
-      i += 1;
-      while (i < lines.length && !lines[i].startsWith('```')) {
-        fence.push(lines[i]);
-        i += 1;
-      }
-      if (i < lines.length) i += 1;
-      blocks.push(html`<pre><code>${fence.join('\n')}</code></pre>`);
-      continue;
+function rewriteReadmeHtml(rawHtml, ctx) {
+  const doc = new DOMParser().parseFromString(`<div class="md-wrap">${rawHtml}</div>`, 'text/html');
+  const root = doc.body.firstElementChild;
+  if (!root) return { html: rawHtml, images: [] };
+  const images = [];
+  root.querySelectorAll('a[href]').forEach((a) => {
+    const href = (a.getAttribute('href') || '').trim();
+    if (!href) return;
+    if (href.startsWith('#') || href.startsWith('/#') || href.startsWith('mailto:') || href.startsWith('tel:')) return;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(href)) {
+      const abs = absHttp(href);
+      if (abs) {
+        a.setAttribute('href', abs);
+        a.setAttribute('rel', 'noopener');
+        a.setAttribute('target', '_blank');
+      } else a.removeAttribute('href');
+      return;
     }
-    const heading = line.match(/^(#{1,6})\s+(.*)$/);
-    if (heading) {
-      const inner = inlineMd(heading[2]);
-      const n = heading[1].length;
-      blocks.push(n === 1 ? html`<h1>${inner}</h1>`
-        : n === 2 ? html`<h2>${inner}</h2>`
-        : n === 3 ? html`<h3>${inner}</h3>`
-        : n === 4 ? html`<h4>${inner}</h4>`
-        : n === 5 ? html`<h5>${inner}</h5>`
-        : html`<h6>${inner}</h6>`);
-      i += 1;
-      continue;
-    }
-    if (/^\s*[-*]\s+/.test(line)) {
-      const items = [];
-      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
-        items.push(html`<li>${inlineMd(lines[i].replace(/^\s*[-*]\s+/, ''))}</li>`);
-        i += 1;
-      }
-      blocks.push(html`<ul>${items}</ul>`);
-      continue;
-    }
-    if (!line.trim()) { i += 1; continue; }
-    const para = [line];
-    i += 1;
-    while (i < lines.length && lines[i].trim()
-      && !lines[i].startsWith('#') && !lines[i].startsWith('```')
-      && !/^\s*[-*]\s+/.test(lines[i])) {
-      para.push(lines[i]);
-      i += 1;
-    }
-    blocks.push(html`<p>${inlineMd(para.join(' '))}</p>`);
-  }
-  return html`<div class="md-body">${blocks}</div>`;
+    if (href.startsWith('/')) return;
+    const { path, hash, trailingSlash } = resolveRepoPath(href, ctx.dir);
+    const next = (trailingSlash ? treeUrl(ctx.org, ctx.repo, ctx.ref, path) : blobUrl(ctx.org, ctx.repo, ctx.ref, path)) + hash;
+    a.setAttribute('href', next);
+  });
+  root.querySelectorAll('img[src]').forEach((img, i) => {
+    const src = (img.getAttribute('src') || '').trim();
+    if (!src) return;
+    if (/^https?:/i.test(src) || src.startsWith('data:')) return;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(src)) { img.remove(); return; }
+    const { path } = resolveRepoPath(src, ctx.dir);
+    const id = `md-img-${ctx.org}-${ctx.repo}-${i}`;
+    img.setAttribute('id', id);
+    img.setAttribute('data-repo-src', path);
+    img.removeAttribute('src');
+    images.push({ id, path });
+  });
+  return { html: root.innerHTML, images };
+}
+
+function sanitizeMarkdown(src) {
+  let parsed = String(src ?? '');
+  try { parsed = marked.parse(parsed, { gfm: true, breaks: false }); } catch { /* keep original */ }
+  try {
+    return DOMPurify.sanitize(parsed, {
+      USE_PROFILES: { html: true },
+      ADD_ATTR: ['align', 'target', 'width', 'height', 'alt', 'id'],
+    });
+  } catch { return parsed; }
+}
+
+function applyImageUrls(body, jobs) {
+  if (!jobs?.length) return body;
+  const box = document.createElement('div');
+  box.innerHTML = body;
+  jobs.forEach((job) => {
+    const el = box.querySelector(`[data-repo-src="${CSS.escape(job.path)}"]`);
+    if (!el) return;
+    if (job.url) el.setAttribute('src', job.url);
+  });
+  return box.innerHTML;
+}
+
+function renderMarkdown(src, ctx, imageJobs) {
+  const { html: body, images } = rewriteReadmeHtml(sanitizeMarkdown(src), ctx);
+  const htmlStr = applyImageUrls(body, imageJobs || images);
+  return { template: html`<div class="md-body">${unsafeHTML(htmlStr)}</div>`, images };
 }
 
 function isLikelyText(bytes, name) {
@@ -363,6 +447,156 @@ async function bytesFromHint(org, repo, hint) {
   return { bytes: null, loc, spError: 'no storage URL' };
 }
 
+async function hydrateReadmeImages(images, org, repo, ref) {
+  if (!images?.length) return;
+  await Promise.all(images.map(async (job) => {
+    try {
+      const blob = await loadBlob(org, repo, ref, job.path);
+      let url = null;
+      if (blob.bytes && blob.bytes.length) {
+        url = URL.createObjectURL(new Blob([blob.bytes], { type: mimeFromPath(job.path) }));
+      } else if (blob.loc?.url && (blob.loc.offset == null || blob.loc.offset === 0) && !blob.loc.length) {
+        url = blob.loc.url;
+      }
+      job.url = url;
+    } catch { job.url = null; }
+  }));
+}
+
+function pcidMap(cs) {
+  const out = {};
+  const md = cs?.metadata || {};
+  for (const [k, v] of Object.entries(md)) {
+    if (k.startsWith('pcid:')) out[k.slice(5)] = v;
+  }
+  if (!Object.keys(out).length && Array.isArray(cs?.changes)) {
+    for (const c of cs.changes) {
+      if (!c?.path) continue;
+      if (c.op === 'delete') out[c.path] = undefined;
+      else out[c.path] = c.blob || c.id || c.pieceCid;
+    }
+  }
+  return out;
+}
+
+function diffFilesFromMaps(baseMap, headMap) {
+  const paths = new Set([...Object.keys(baseMap), ...Object.keys(headMap)]);
+  const files = [];
+  for (const path of [...paths].sort()) {
+    const b = baseMap[path];
+    const h = headMap[path];
+    if (b === h) continue;
+    if (h == null && !(path in headMap)) files.push({ path, status: 'removed' });
+    else if (b == null && !(path in baseMap)) files.push({ path, status: 'added' });
+    else if (h == null) files.push({ path, status: 'removed' });
+    else if (b == null) files.push({ path, status: 'added' });
+    else files.push({ path, status: 'modified' });
+  }
+  return files;
+}
+
+function lcsDiffLines(aLines, bLines) {
+  const n = aLines.length;
+  const m = bLines.length;
+  if (n > 800 || m > 800 || n * m > 250000) {
+    return [
+      { t: 'meta', s: `@@ large file (${n} → ${m} lines) @@` },
+      ...aLines.slice(0, 30).map((s) => ({ t: 'del', s })),
+      ...bLines.slice(0, 30).map((s) => ({ t: 'add', s })),
+    ];
+  }
+  const dp = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i -= 1) {
+    for (let j = m - 1; j >= 0; j -= 1) {
+      dp[i][j] = aLines[i] === bLines[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const out = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (aLines[i] === bLines[j]) { out.push({ t: 'ctx', s: aLines[i] }); i += 1; j += 1; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { out.push({ t: 'del', s: aLines[i] }); i += 1; }
+    else { out.push({ t: 'add', s: bLines[j] }); j += 1; }
+  }
+  while (i < n) { out.push({ t: 'del', s: aLines[i] }); i += 1; }
+  while (j < m) { out.push({ t: 'add', s: bLines[j] }); j += 1; }
+  return out;
+}
+
+async function loadCompare(org, repo, baseRev, headRev) {
+  const b = `/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}`;
+  const tries = [
+    `${b}/compare/${apiRef(baseRev)}...${apiRef(headRev)}`,
+    `${b}/compare?base=${encodeURIComponent(baseRev)}&head=${encodeURIComponent(headRev)}`,
+    `${b}/diff?base=${encodeURIComponent(baseRev)}&head=${encodeURIComponent(headRev)}`,
+  ];
+  for (const p of tries) {
+    try {
+      const data = await api(p);
+      const files = data.files || data.changes || data.entries || [];
+      if (Array.isArray(files) && (files.length || data.status === 'identical')) {
+        return { source: 'compare', files: files.map((f) => ({
+          path: f.path || f.filename || f.name,
+          status: f.status || f.op || (f.kind === 'delete' ? 'removed' : 'modified'),
+        })) };
+      }
+    } catch { /* try next / fall through */ }
+  }
+  const [baseCs, headCs] = await Promise.all([
+    api(`${b}/changesets/${encodeURIComponent(baseRev)}`).catch(() => null),
+    api(`${b}/changesets/${encodeURIComponent(headRev)}`).catch(() => null),
+  ]);
+  return { source: 'changesets', files: diffFilesFromMaps(pcidMap(baseCs), pcidMap(headCs)), baseCs, headCs };
+}
+
+async function loadFileDiffs(org, repo, baseRev, headRev, files) {
+  const slice = files.slice(0, MAX_DIFF_FILES);
+  const rows = [];
+  for (const f of slice) {
+    const path = f.path;
+    if (!path) continue;
+    const row = { ...f, lines: null, skip: '' };
+    if (f.status === 'removed') {
+      try {
+        const blob = await loadBlob(org, repo, baseRev, path);
+        if (!blob.bytes || !isLikelyText(blob.bytes, path)) { row.skip = 'binary or empty'; }
+        else {
+          const text = decodeUtf8(blob.bytes.subarray(0, MAX_DIFF_BYTES));
+          row.lines = text.split('\n').map((s) => ({ t: 'del', s }));
+        }
+      } catch (e) { row.skip = e.message; }
+    } else if (f.status === 'added') {
+      try {
+        const blob = await loadBlob(org, repo, headRev, path);
+        if (!blob.bytes || !isLikelyText(blob.bytes, path)) { row.skip = 'binary or empty'; }
+        else {
+          const text = decodeUtf8(blob.bytes.subarray(0, MAX_DIFF_BYTES));
+          row.lines = text.split('\n').map((s) => ({ t: 'add', s }));
+        }
+      } catch (e) { row.skip = e.message; }
+    } else {
+      try {
+        const [oldB, newB] = await Promise.all([
+          loadBlob(org, repo, baseRev, path).catch(() => null),
+          loadBlob(org, repo, headRev, path).catch(() => null),
+        ]);
+        const oldBytes = oldB?.bytes;
+        const newBytes = newB?.bytes;
+        if ((oldBytes && !isLikelyText(oldBytes, path)) || (newBytes && !isLikelyText(newBytes, path))) {
+          row.skip = 'binary file';
+        } else {
+          const oldT = oldBytes ? decodeUtf8(oldBytes.subarray(0, MAX_DIFF_BYTES)) : '';
+          const newT = newBytes ? decodeUtf8(newBytes.subarray(0, MAX_DIFF_BYTES)) : '';
+          row.lines = lcsDiffLines(oldT.split('\n'), newT.split('\n'));
+        }
+      } catch (e) { row.skip = e.message; }
+    }
+    rows.push(row);
+  }
+  return { rows, truncated: files.length > MAX_DIFF_FILES, total: files.length };
+}
+
 async function loadBlob(org, repo, ref, path) {
   try {
     const data = await api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/blob/${apiRef(ref)}?path=${encodeURIComponent(path)}`);
@@ -414,6 +648,50 @@ function findReadme(entries) {
   return null;
 }
 
+function conflictSample() {
+  return html`<pre class="conflict-sample"><code><span class="mark">&lt;&lt;&lt;&lt;&lt;&lt;&lt; local</span>
+the line as it is on your branch
+=======
+the line as it is on main
+<span class="mark">&gt;&gt;&gt;&gt;&gt;&gt;&gt; main</span></code></pre>`;
+}
+
+function downloadSection() {
+  return html`
+    <div class="download-grid">
+      <article class="download-card recommended">
+        <h3>Linux x86_64 <span class="badge recommend-badge">release</span></h3>
+        <p class="muted">GitHub Release <a href=${RELEASE_PAGE} data-external target="_blank" rel="noopener">${RELEASE_TAG}</a> · <code>${RELEASE_ASSET}</code></p>
+        <a class="btn btn-primary" href=${RELEASE_ASSET_URL} data-external>Download ${RELEASE_ASSET}</a>
+      </article>
+      <article class="download-card">
+        <h3>From source (cargo)</h3>
+        <p class="muted">Builds the <code>scn</code> CLI from the same tagged release.</p>
+        ${pre([`cargo install --git https://github.com/scionhub/openscion --tag ${RELEASE_TAG} --bin scn`])}
+      </article>
+    </div>
+    <div class="download-steps docs-content">
+      <h3>Install the binary</h3>
+      ${pre([
+        `curl -L -o ${RELEASE_ASSET} ${RELEASE_ASSET_URL}`,
+        `tar xzf ${RELEASE_ASSET}`,
+        'mkdir -p ~/.local/bin',
+        'mv scn ~/.local/bin/',
+        'export PATH="$HOME/.local/bin:$PATH"',
+        'scn --help',
+      ])}
+      <h3>Point it at ScionBase</h3>
+      ${pre([ENV, 'scn version'])}
+      <h3>Shell completion</h3>
+      ${pre([
+        'mkdir -p ~/.local/share/bash-completion/completions',
+        'scn completion bash > ~/.local/share/bash-completion/completions/scn',
+        'scn completion zsh > "${fpath[1]}/_scn"',
+        'scn completion fish > ~/.config/fish/completions/scn.fish',
+      ])}
+    </div>`;
+}
+
 /* ---------- views ---------- */
 const Home = () => html`
   <section class="hero"><div class="container hero-inner">
@@ -429,11 +707,12 @@ const Home = () => html`
         <a class="btn btn-ghost btn-lg" href="/#/orgs">Browse orgs</a>
       </div>
     </div>
-    <figure class="hero-art"><div class="art-card">
-      <div class="art-row"><span class="chip">Repos &amp; branches</span><span class="chip">Pull requests</span><span class="chip">opnscn CLI</span></div>
-      <div class="art-row"><span class="chip chip-accent">Filecoin PDP</span><span class="chip">PieceCID</span><span class="chip">Direct SP reads</span></div>
-      <div class="art-row"><span class="chip">Orgs</span><span class="chip">Agent‑scale</span><span class="chip">Monorepo</span></div>
-    </div></figure>
+    <figure class="hero-art">
+      <picture>
+        <source type="image/webp" srcset="/assets/images/logo-512.webp" />
+        <img class="hero-logo" src="/assets/images/logo-512.png" width="512" height="512" alt="ScionBase" />
+      </picture>
+    </figure>
   </div></section>
 
   <section id="problem" class="section"><div class="container">
@@ -449,18 +728,17 @@ const Home = () => html`
   <section id="start" class="section alt"><div class="container docs-content">
     <h2>Get started</h2>
     <h3 id="download">1. Download the CLI</h3>
-    <p class="gap-note">Prebuilt <code>opnscn</code> binaries are not published yet — downloads for macOS, Linux and Windows are coming. Contact <a href="https://filoz.org" target="_blank" rel="noopener">FilOz</a> for early access to the CLI source and build it with Rust: <code>cargo build --release --bin opnscn</code>.</p>
-    <h3 id="setup">2. Point it at ScionBase</h3>
-    ${pre([ENV, 'opnscn server-info'])}
-    <h3 id="user">3. Create a user</h3>
+    <p>The CLI binary is <code>scn</code>. Prebuilt Linux builds are on the <a href=${RELEASE_PAGE} data-external target="_blank" rel="noopener">${RELEASE_TAG} GitHub Release</a>. <a href="/#/cli">Full install page</a>.</p>
+    ${downloadSection()}
+    <h3 id="user">2. Create a user</h3>
     <p>On the web: <a href="/#/login">Sign in / create account</a>. Or with the CLI:</p>
-    ${pre(['opnscn signup --username <you> --email <you@example.com>', 'opnscn login --user <you>'])}
-    <h3 id="org">4. Your org and first repo</h3>
-    <p>Your username is your org: it is created with your first repository. Org admins can create repos in orgs you belong to.</p>
-    ${pre(['opnscn repo create <name>', 'opnscn repo create <name> --org <org>'])}
-    <h3 id="import">5. Push your code</h3>
-    ${pre(['cd path/to/your-project', 'opnscn import . --repo <you>/<name> -m "initial import"', '# then, for each change:', 'opnscn commit -m "describe the change"'])}
-    <p><a class="btn btn-primary" href="/#/getting-started">Full CLI guide: clone, branch, PR, sync →</a></p>
+    ${pre(['scn signup --username <you> --email <you@example.com>', 'scn login --user <you>'])}
+    <h3 id="org">3. Your org and first repo</h3>
+    <p>Your username is your org. Create more orgs on the <a href="/#/orgs">organizations</a> page or with the CLI.</p>
+    ${pre(['scn org create <name>', 'scn org list', 'scn repo create <name>', 'scn repo create <name> --org <org>'])}
+    <h3 id="import">4. Clone, branch, push</h3>
+    ${pre(['scn clone <org>/<repo>', 'cd <repo>', 'scn branch new my-feature --from main', 'scn branch switch my-feature', '# edit files, then:', 'scn push -m "describe the change"', 'scn pr create --title "My change"'])}
+    <p><a class="btn btn-primary" href="/#/getting-started">Full CLI guide: clone, branch, pull, merge, PR →</a></p>
   </div></section>
 
   <section id="pricing" class="section"><div class="container">
@@ -477,35 +755,40 @@ const Home = () => html`
 const GettingStarted = () => html`
   <div class="page"><div class="container docs-content">
     <h1>CLI guide</h1>
-    <p class="tiny-note">The ScionBase CLI is <code>opnscn</code>. Every command below matches <code>opnscn --help</code>. <a href="/#download">Download status</a>.</p>
+    <p class="tiny-note">The ScionBase CLI is <code>scn</code>. Set <code>SCN_SERVER</code> (or pass <code>--server</code>). <a href="/#/cli">Download</a>.</p>
     <h2 id="setup">1. Point the CLI at ScionBase</h2>
-    <p>Every command accepts <code>--server &lt;URL&gt;</code>; an alias sets it once.</p>
-    ${pre([ENV, 'opnscn server-info', 'opnscn version'])}
+    ${pre([ENV, 'scn version'])}
     <h2 id="account">2. Create an account and log in</h2>
     <p>Needed for writes. Username must match <code>^[a-z0-9][a-z0-9-]{2,31}$</code>; password at least 10 characters. Or use the <a href="/#/login">web sign in</a>.</p>
-    ${pre(['opnscn signup --username <you>', 'opnscn signup --username <you> --email <you@example.com>', 'opnscn login --user <you>'])}
-    <h2 id="create">3. Create a repository</h2>
-    <p>Creates a public repo under your username org (created on first use) or an org you belong to. <code>filecoin-project</code> is admin-only. Non-admins: 3 repos max. Name: <code>^[a-z0-9][a-z0-9._-]{0,63}$</code>. On the web: <a href="/#/new">New repository</a>.</p>
-    ${pre(['opnscn repo create <name>', 'opnscn repo create <name> --org <org>'])}
-    <h2 id="import">4. Import / push a directory</h2>
-    <p><code>opnscn import</code> records a directory as the repository’s first changeset, creates the ref, and turns the directory into a working copy. Content is stored on Filecoin and addressed by PieceCID.</p>
-    ${pre(['cd path/to/your-project', 'opnscn import . --repo <org>/<repo> --ref main -m "initial import" --author <you>', '# keep pushing changes from the same directory:', 'opnscn commit -m "describe the change"'])}
-    <h2 id="clone">5. Clone an existing repo</h2>
-    <p>Public clones need no account.</p>
-    ${pre(['opnscn clone ./curio --repo filecoin-project/curio', 'opnscn clone ./curio --repo filecoin-project/curio --ref main', 'opnscn clone ./curio --repo filecoin-project/curio --path src'])}
-    <h2 id="branch">6. Branch, commit, open a PR</h2>
-    <p>Org members can move any ref. Anyone logged in can push under <code>refs/heads/users/&lt;you&gt;/*</code> on a public repo.</p>
-    ${pre(['cd curio', '# edit files, then publish to refs/heads/users/<you>/my-feature', 'opnscn branch push my-feature -m "my change"', 'opnscn pr create --title "My change" --head refs/heads/users/<you>/my-feature --base main', 'opnscn pr list', 'opnscn pr show <number>', 'opnscn pr merge <number>   # org member or admin; fast-forward', 'opnscn pr close <number>'])}
-    <h2 id="sync">7. Sync a branch and resolve conflicts</h2>
-    <p><code>opnscn sync</code> three-way-merges the working copy with a target ref (default <code>main</code>), including uncommitted local edits. Both-changed paths get git-style markers; commit refuses while markers remain.</p>
-    ${pre(['opnscn sync', 'opnscn sync --from main --dir .'])}
-    <pre class="conflict-sample"><code><span class="mark">&lt;&lt;&lt;&lt;&lt;&lt;&lt; local</span>
-the line as it is on your branch
-=======
-the line as it is on main
-<span class="mark">&gt;&gt;&gt;&gt;&gt;&gt;&gt; main</span></code></pre>
-    ${pre(['opnscn commit -m "merge main"', 'opnscn branch push my-feature', 'opnscn pr merge <number>'])}
+    ${pre(['scn signup --username <you>', 'scn signup --username <you> --email <you@example.com>', 'scn login --user <you>'])}
+    <h2 id="create">3. Organizations and repositories</h2>
+    <p>Creates a public repo under your username org or an org you belong to. <code>filecoin-project</code> is admin-only. Non-admins: 3 repos max. Name: <code>^[a-z0-9][a-z0-9._-]{0,63}$</code>. On the web: <a href="/#/new">New repository</a>, <a href="/#/orgs">New organization</a>.</p>
+    ${pre(['scn org create <name>', 'scn org list', 'scn repo create <name>', 'scn repo create <name> --org <org>'])}
+    <h2 id="clone">4. Clone</h2>
+    <p>Public clones need no account. Git-like: <code>scn clone org/repo [dir] [--branch b]</code>.</p>
+    ${pre(['scn clone filecoin-project/curio', 'scn clone filecoin-project/curio ./curio --branch main'])}
+    <h2 id="branch">5. Branch</h2>
+    ${pre(['scn branch', 'scn branch new my-feature --from main', 'scn branch switch my-feature', 'scn branch delete old-feature'])}
+    <h2 id="pull">6. Pull, merge, push</h2>
+    <p><code>scn pull</code> fetches the current branch. <code>scn merge &lt;ref&gt;</code> three-way-merges; both-changed paths get git-style markers. Then <code>scn push</code>.</p>
+    ${pre(['scn pull', 'scn merge main', 'scn push', 'scn push -m "describe the change"'])}
+    ${conflictSample()}
+    <p>Edit the file to the resolved contents (remove the markers), then push.</p>
+    <h2 id="pr">7. Pull requests</h2>
+    <p>Merge is org member/admin; close is the author or an admin. Fast-forward when the head changeset’s first parent is still the current base.</p>
+    ${pre(['scn pr create --title "My change"', 'scn pr create --title "My change" --body "details"', 'scn pr list', 'scn pr show 1', 'scn pr merge 1', 'scn pr close 1'])}
+    <h2 id="completion">8. Completion</h2>
+    ${pre(['scn completion bash', 'scn completion zsh', 'scn completion fish'])}
     <p>Browse <a href="/#/orgs">organizations</a>.</p>
+  </div></div>`;
+
+const CliView = () => html`
+  <div class="page"><div class="container docs-content">
+    <h1>Download the CLI</h1>
+    <p>The ScionBase CLI is <code>scn</code>. Linux x86_64 builds are published on GitHub Release
+      <a href=${RELEASE_PAGE} data-external target="_blank" rel="noopener">${RELEASE_TAG}</a>.</p>
+    ${downloadSection()}
+    <p><a href="/#/getting-started">Full CLI guide</a></p>
   </div></div>`;
 
 const LoginView = () => {
@@ -574,7 +857,7 @@ const LoginView = () => {
 
 const NewRepoView = () => {
   const auth = getAuth();
-  const st = { owners: auth?.username ? [auth.username] : [], err: '', busy: false, created: null };
+  const st = { owners: auth?.username ? [{ id: auth.username, role: 'you' }] : [], err: '', busy: false, created: null };
   const view = () => {
     if (!auth) {
       return html`<div class="page"><div class="container narrow">
@@ -598,7 +881,7 @@ const NewRepoView = () => {
         </div>
         <p><a class="btn" href=${repoUrl(c.org, c.name)}>Open ${full}</a></p>
         <h2>Push the first content</h2>
-        ${pre([ENV, `opnscn import ./src --repo ${full}`, `# or, from the project directory:`, `opnscn import . --repo ${full} --ref main -m "initial import"`])}
+        ${pre([ENV, `scn clone ${full}`, `cd ${c.name}`, `scn push -m "initial import"`])}
       </div></div>`;
     }
     return html`<div class="page"><div class="container narrow">
@@ -606,7 +889,7 @@ const NewRepoView = () => {
       <p class="tiny-note">Creates a public repo via <code>POST /v1/repos</code>. Non-admins: 3 repos max. <code>filecoin-project</code> is admin-only.</p>
       <form class="card form" @submit=${onCreate}>
         <label for="repo-owner">Owner</label>
-        <select id="repo-owner" name="org">${st.owners.map((o) => html`<option value=${o} ?selected=${o === auth.username}>${o}</option>`)}</select>
+        <select id="repo-owner" name="org">${st.owners.map((o) => html`<option value=${o.id} ?selected=${o.id === auth.username}>${o.role && o.role !== 'you' ? `${o.id} (${o.role})` : o.id}</option>`)}</select>
         <label for="repo-name">Repository name</label>
         <input id="repo-name" name="name" type="text" required pattern="[a-z0-9][a-z0-9._-]{0,63}" placeholder="my-repo" />
         <div class="form-actions"><button class="btn btn-primary" type="submit" ?disabled=${st.busy}>${st.busy ? 'Creating…' : 'Create repository'}</button></div>
@@ -631,22 +914,9 @@ const NewRepoView = () => {
   return {
     view,
     load: async (rerender) => {
-      const owners = [];
-      if (auth?.username) owners.push(auth.username);
-      const tryPaths = ['/v1/me', '/v1/me/orgs', `/v1/users/${encodeURIComponent(auth?.username || '')}/orgs`];
-      for (const p of tryPaths) {
-        if (!auth) break;
-        try {
-          const data = await api(p, { auth: true });
-          const list = Array.isArray(data) ? data
-            : data?.orgs || data?.memberships || data?.organizations || [];
-          for (const item of list) {
-            const id = typeof item === 'string' ? item : item?.id || item?.org || item?.name;
-            if (id && id !== 'filecoin-project' && !owners.includes(id)) owners.push(id);
-          }
-        } catch { /* not discoverable yet */ }
-      }
-      st.owners = owners.length ? owners : (auth?.username ? [auth.username] : []);
+      if (auth?.token) await refreshMe();
+      const owners = ownerChoices();
+      st.owners = owners.length ? owners : (auth?.username ? [{ id: auth.username, role: 'you' }] : []);
       rerender();
     },
   };
@@ -670,7 +940,7 @@ const OrgView = (org) => {
         <ul class="repo-list">${!s ? html`<li class="repo-item"><span class="muted">Loading…</span></li>`
           : s.data.length ? s.data.map((r) => html`<li class="repo-item"><a href=${repoUrl(org, r)}><strong>${org}/${r}</strong></a><span class="badge">public</span></li>`)
           : html`<li class="repo-item"><span class="muted">No repositories yet.</span></li>`}</ul>
-        <p class="tiny-note">Have code to bring? <a href="/#/getting-started">Import it with <code>opnscn import</code></a>.</p>
+        <p class="tiny-note">Have code to bring? <a href="/#/getting-started">Clone and push with <code>scn</code></a>.</p>
       </section>
     </div></div>`;
   return { view: () => view(st.s), load: async (rerender) => {
@@ -699,13 +969,17 @@ const RepoView = (org, repo, opts) => {
     pulls: null,
     pull: null,
     copied: false,
+    cliTab: 'Clone',
+    diff: null,
+    prBusy: '',
+    prErr: '',
     tab: opts.tab || 'code',
     kind: opts.kind || 'tree',
     ref: opts.ref || 'main',
     path: opts.path || '',
     pullNo: opts.pull || null,
   };
-  const cloneCmd = `opnscn clone ./${repo} --repo ${full}`;
+  const cloneCmd = `scn clone ${full}`;
 
   const onBranch = (e) => {
     const next = e.target.value;
@@ -767,7 +1041,7 @@ const RepoView = (org, repo, opts) => {
             return html`<tr>
               <td class="kind">${k}</td>
               <td><a href=${href}>${e.name}</a></td>
-              <td class="size">${k === 'dir' ? '' : fmtSize(e.size)}</td>
+              <td class="size">${k === 'dir' ? '' : fmtSize(entrySize(e))}</td>
             </tr>`;
           }) : html`<tr><td colspan="3" class="muted">${t.error ? `Could not list this directory (${t.error}).` : 'Empty directory.'}</td></tr>`}
         </tbody>
@@ -824,13 +1098,54 @@ const RepoView = (org, repo, opts) => {
     if (r.loading) return html`<div class="readme-wrap card"><h2>README</h2><p class="muted">Loading…</p></div>`;
     if (!r.bytes) return nothing;
     if (!isLikelyText(r.bytes, r.name)) return nothing;
-    const text = decodeUtf8(r.bytes);
-    const md = /\.md$/i.test(r.name);
+    if (r.template) {
+      return html`<div class="readme-wrap card">
+        <h2>${r.name}</h2>
+        ${r.template}
+      </div>`;
+    }
     return html`<div class="readme-wrap card">
       <h2>${r.name}</h2>
-      ${md ? ((mdBase = { org, repo, ref: st.ref, dir: st.path }), renderMarkdown(text)) : html`<pre><code>${text}</code></pre>`}
+      <pre><code>${decodeUtf8(r.bytes)}</code></pre>
     </div>`;
   };
+
+  const cliSnippets = {
+    Clone: [cloneCmd, `scn clone ${full} ./${repo} --branch ${st.ref}`],
+    Branch: [
+      'scn branch',
+      `scn branch new my-feature --from ${st.ref}`,
+      'scn branch switch my-feature',
+      'scn branch delete old-feature',
+    ],
+    Pull: ['scn pull'],
+    Merge: [
+      `scn merge ${st.ref === 'main' ? 'main' : st.ref}`,
+      '# if both sides changed a path, resolve git-style markers, then:',
+      'scn push -m "merge main"',
+    ],
+    Push: ['scn push', 'scn push -m "describe the change"'],
+    PR: [
+      'scn pr create --title "My change"',
+      'scn pr create --title "My change" --body "details"',
+      'scn pr list',
+      'scn pr show 1',
+      'scn pr merge 1',
+      'scn pr close 1',
+    ],
+  };
+  const cliPanel = () => html`
+    <div class="cli-panel card">
+      <h3 style="margin-top:0">CLI</h3>
+      <p class="tiny-note">${ENV}</p>
+      <div class="cli-tabs" role="tablist">
+        ${Object.keys(cliSnippets).map((name) => html`<button type="button" role="tab"
+          aria-selected=${st.cliTab === name ? 'true' : 'false'}
+          @click=${() => { st.cliTab = name; draw(); }}>${name}</button>`)}
+      </div>
+      ${pre(cliSnippets[st.cliTab] || cliSnippets.Clone)}
+      ${st.cliTab === 'Merge' ? html`<p>A conflicted file looks like:</p>${conflictSample()}` : nothing}
+    </div>`;
 
   const codeTab = () => html`
     <div class="file-toolbar">
@@ -844,43 +1159,92 @@ const RepoView = (org, repo, opts) => {
         <button type="button" @click=${onCopy}>${st.copied ? 'Copied' : 'Copy'}</button>
       </div>
     </div>
-    ${st.kind === 'blob' ? blobView() : html`${fileTable()}${readmeView()}`}`;
+    ${st.kind === 'blob' ? blobView() : html`${fileTable()}${readmeView()}`}
+    ${cliPanel()}`;
+
+  async function prAction(verb) {
+    if (!st.pullNo || st.prBusy) return;
+    st.prErr = ''; st.prBusy = verb; draw();
+    try {
+      const data = await api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/pulls/${encodeURIComponent(st.pullNo)}/${verb}`, {
+        method: 'POST', auth: true, body: {},
+      });
+      st.pull = { live: true, data };
+      st.prBusy = '';
+      draw();
+    } catch (e) {
+      st.prErr = e.message || String(e);
+      st.prBusy = '';
+      draw();
+    }
+  }
 
   const pullsTab = () => {
     if (st.pullNo) {
       const p = st.pull;
       if (!p) return html`<p class="muted">Loading pull request…</p>`;
       if (!p.live) return html`<p class="muted">Could not load PR #${st.pullNo}: ${p.error}</p>`;
+      const d = p.data || {};
+      const state = d.state || 'open';
+      const author = d.author || d.author_name || 'unknown';
+      const head = d.head_ref || d.head || '';
+      const base = d.base_ref || d.base || 'main';
+      const open = state === 'open';
+      const canMerge = open && (getMe()?.user?.admin || isOrgMember(org));
+      const canClose = open && (getMe()?.user?.admin || meName() === author || getMe()?.user?.id === d.author_user_id);
+      const files = st.diff?.files || [];
       return html`
-        <p><a href=${repoUrl(org, repo, ['pulls'])}>← Pull requests</a></p>
-        <h2>#${p.data.number} ${p.data.title || ''}</h2>
-        <pre class="json-dump"><code>${JSON.stringify(p.data, null, 2)}</code></pre>`;
+        <div class="pr-detail">
+          <p><a href=${repoUrl(org, repo, ['pulls'])}>← Pull requests</a></p>
+          <h2>#${d.number ?? st.pullNo} ${d.title || ''}</h2>
+          <div class="pr-meta-row">
+            <span class="badge pr-state">${state}</span>
+            <span>${author}</span>
+            <span class="mono">${head} → ${base}</span>
+            <span class="tiny-note">${fmtTime(d.created_at)}</span>
+          </div>
+          ${d.body ? html`<div class="card md-body" style="margin-bottom:1rem">${(() => { const r = renderMarkdown(d.body, { org, repo, ref: head || st.ref, dir: '' }); return r.template; })()}</div>` : nothing}
+          ${open ? html`<div class="pr-actions">
+            ${canMerge ? html`<button class="btn btn-primary" type="button" ?disabled=${!!st.prBusy} @click=${() => prAction('merge')}>${st.prBusy === 'merge' ? 'Merging…' : 'Merge'}</button>` : nothing}
+            ${canClose ? html`<button class="btn" type="button" ?disabled=${!!st.prBusy} @click=${() => prAction('close')}>${st.prBusy === 'close' ? 'Closing…' : 'Close'}</button>` : nothing}
+            ${!canMerge && !canClose ? html`<p class="tiny-note">Sign in as an org member to merge, or as the author to close.</p>` : nothing}
+          </div>` : nothing}
+          ${st.prErr ? html`<p class="form-error">${st.prErr}</p>` : nothing}
+          <h3>Files</h3>
+          ${!st.diff ? html`<p class="muted">Loading diff…</p>`
+            : st.diff.error ? html`<p class="muted">Could not compare ${base} and ${head}: ${st.diff.error}</p>`
+            : html`
+              <ul class="diff-list">${files.map((f) => html`<li class="diff-item"><span class="st ${f.status === 'added' ? 'add' : f.status === 'removed' ? 'del' : 'mod'}">${f.status}</span><a href=${blobUrl(org, repo, d.head_target || head, f.path)}>${f.path}</a></li>`)}</ul>
+              ${st.diff.truncated ? html`<p class="tiny-note">Showing ${st.diff.rows?.length || 0} of ${st.diff.total} files.</p>` : nothing}
+              ${(st.diff.rows || []).map((row) => html`<div class="diff-file">
+                <h4>${row.path} <span class="tiny-note">${row.status}${row.skip ? ` · ${row.skip}` : ''}</span></h4>
+                ${row.lines ? html`<pre class="diff-hunk">${row.lines.map((ln) => html`<div class=${ln.t}>${ln.t === 'add' ? '+' : ln.t === 'del' ? '-' : ln.t === 'meta' ? '' : ' '}${ln.s}</div>`)}</pre>` : nothing}
+              </div>`)}
+            `}
+        </div>`;
     }
     const rows = pullList(st.pulls).filter((p) => (p.state || 'open') === 'open');
     return html`
       <h2 style="margin-top:0">Open pull requests</h2>
       ${!st.pulls ? html`<p class="muted">Loading…</p>`
-        : !st.pulls.live ? html`<p class="muted">Couldn't load pull requests (${st.pulls.error}). Try <code>opnscn pr list --repo ${full}</code>.</p>`
+        : !st.pulls.live ? html`<p class="muted">Couldn't load pull requests (${st.pulls.error}). Try <code>scn pr list</code>.</p>`
         : rows.length ? html`<ul class="repo-list">${rows.map((p) => html`<li class="repo-item pr-item">
             <a href=${repoUrl(org, repo, ['pulls', String(p.number)])}><strong>#${p.number}</strong> ${p.title}</a>
             <span class="badge">${p.state || 'open'}</span>
-            <span class="pr-meta">${p.author || p.author_name || 'unknown'} · ${p.head_ref || p.head || ''} · ${fmtTime(p.created_at)}</span>
+            <span class="pr-meta">${p.author || p.author_name || 'unknown'} · ${p.head_ref || p.head || ''} → ${p.base_ref || p.base || 'main'} · ${fmtTime(p.created_at)}</span>
           </li>`)}</ul>`
-        : html`<p class="muted">No open pull requests.</p>`}`;
+        : html`<p class="muted">No open pull requests.</p>`}
+      ${cliPanel()}`;
   };
 
   const syncTab = () => html`
-    <h2 style="margin-top:0">Sync this branch</h2>
-    <p><code>opnscn sync</code> three-way-merges your working copy with a target ref (default <code>main</code>), including uncommitted local edits. Upstream-only changes are taken; local-only changes are kept; both-changed paths get git-style markers. Commit refuses while conflict markers remain.</p>
-    ${pre([ENV, `opnscn clone ./${repo} --repo ${full}`, `cd ${repo}`, 'opnscn branch push my-feature', '# edit files; if main moved:', 'opnscn sync', 'opnscn sync --from main --dir .'])}
+    <h2 style="margin-top:0">Pull and merge</h2>
+    <p><code>scn pull</code> updates the working copy. <code>scn merge &lt;ref&gt;</code> three-way-merges with a target ref. Both-changed paths get git-style markers; push refuses while markers remain.</p>
+    ${pre([ENV, `scn clone ${full}`, `cd ${repo}`, 'scn branch new my-feature --from main', 'scn branch switch my-feature', '# edit files; if main moved:', 'scn pull', 'scn merge main'])}
     <p>A conflicted file looks like:</p>
-    <pre class="conflict-sample"><code><span class="mark">&lt;&lt;&lt;&lt;&lt;&lt;&lt; local</span>
-the line as it is on your branch
-=======
-the line as it is on main
-<span class="mark">&gt;&gt;&gt;&gt;&gt;&gt;&gt; main</span></code></pre>
+    ${conflictSample()}
     <p>Remove the markers, keep the resolved contents, then:</p>
-    ${pre(['opnscn commit -m "merge main"', 'opnscn branch push my-feature', `opnscn pr create --repo ${full} --title "My change" --head refs/heads/users/<you>/my-feature --base main`, `opnscn pr merge --repo ${full} 1`])}
+    ${pre(['scn push -m "merge main"', `scn pr create --title "My change"`, `scn pr merge 1`])}
     <p class="tiny-note"><a href="/#/getting-started">Full getting-started guide</a></p>`;
 
   const view = () => html`
@@ -904,8 +1268,27 @@ the line as it is on main
         rerender();
       });
       if (st.tab === 'pulls') {
+        if (getAuth()?.token) refreshMe();
         if (st.pullNo) {
-          tryGet(`${b}/pulls/${encodeURIComponent(st.pullNo)}`, null).then((s) => { st.pull = s; rerender(); });
+          tryGet(`${b}/pulls/${encodeURIComponent(st.pullNo)}`, null).then(async (s) => {
+            st.pull = s;
+            rerender();
+            if (!s?.live || !s.data) return;
+            const d = s.data;
+            const baseRev = d.base_target || d.base_ref || d.base || 'main';
+            const headRev = d.head_target || d.head_ref || d.head;
+            if (!headRev) { st.diff = { files: [], error: 'missing head target' }; rerender(); return; }
+            try {
+              const cmp = await loadCompare(org, repo, baseRev, headRev);
+              st.diff = { files: cmp.files || [], source: cmp.source };
+              rerender();
+              const loaded = await loadFileDiffs(org, repo, baseRev, headRev, cmp.files || []);
+              st.diff = { ...st.diff, ...loaded };
+            } catch (e) {
+              st.diff = { files: [], error: e.message || String(e) };
+            }
+            rerender();
+          });
         } else {
           tryGet(`${b}/pulls`, { pulls: [] }).then((s) => { st.pulls = s; rerender(); });
         }
@@ -931,7 +1314,21 @@ the line as it is on main
           rerender();
           try {
             const blob = await loadBlob(org, repo, st.ref, rpath);
-            st.readme = { name: readmeEnt.name, bytes: blob.bytes, loc: blob.loc };
+            const text = blob.bytes && isLikelyText(blob.bytes, readmeEnt.name) ? decodeUtf8(blob.bytes) : '';
+            const md = /\.md$/i.test(readmeEnt.name);
+            let template = null;
+            let images = [];
+            if (md && text) {
+              const rendered = renderMarkdown(text, { org, repo, ref: st.ref, dir: st.path });
+              template = rendered.template;
+              images = rendered.images;
+            }
+            st.readme = { name: readmeEnt.name, bytes: blob.bytes, loc: blob.loc, template, images };
+            rerender();
+            if (images.length) {
+              await hydrateReadmeImages(images, org, repo, st.ref);
+              st.readme.template = renderMarkdown(text, { org, repo, ref: st.ref, dir: st.path }, images).template;
+            }
           } catch {
             st.readme = null;
           }
@@ -992,14 +1389,36 @@ function codeBlock(path, text, count) {
 
 /* ---------- orgs list ---------- */
 const OrgsView = () => {
-  const st = { orgs: null, err: '' };
+  const st = { orgs: null, err: '', formErr: '', busy: false, created: null };
+  async function onCreate(e) {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const name = String(fd.get('name') || '').trim();
+    st.formErr = ''; st.busy = true; draw();
+    try {
+      if (!ORG_NAME_RE.test(name)) throw new Error('name must match ^[a-z0-9][a-z0-9-]{2,31}$');
+      const data = await api('/v1/orgs', { method: 'POST', auth: true, body: { name } });
+      const id = data?.id || data?.name || data?.org || name;
+      st.created = id;
+      st.busy = false;
+      refreshMe();
+      navigate(orgUrl(id));
+    } catch (err) { st.formErr = err.message || String(err); st.busy = false; draw(); }
+  }
   return {
     view: () => html`<div class="page"><div class="container">
       <h1>Organizations</h1>
+      ${getAuth() ? html`<form class="card form" style="max-width:28rem;margin:0 0 1.25rem" @submit=${onCreate}>
+        <h2 style="margin-top:0">New organization</h2>
+        <label for="org-name">Name</label>
+        <input id="org-name" name="name" type="text" required pattern="[a-z0-9][a-z0-9-]{2,31}" placeholder="my-org" />
+        <div class="form-actions"><button class="btn btn-primary" type="submit" ?disabled=${st.busy}>${st.busy ? 'Creating…' : 'Create organization'}</button></div>
+        ${st.formErr ? html`<p class="form-error">${st.formErr}</p>` : nothing}
+      </form>` : html`<p class="tiny-note"><a href="/#/login">Sign in</a> to create an organization.</p>`}
       <ul class="repo-list">${!st.orgs ? html`<li class="repo-item"><span class="muted">${st.err || 'Loading…'}</span></li>`
         : st.orgs.length ? st.orgs.map((o) => html`<li class="repo-item"><a href=${orgUrl(o)}><strong>${o}</strong></a></li>`)
         : html`<li class="repo-item"><span class="muted">No organizations yet.</span></li>`}</ul>
-      <p class="tiny-note">Your username is your first org: it is created when you create your first repository. <a href="/#/new">New repository</a></p>
+      <p class="tiny-note">Your username is your first org. CLI: <code>scn org create &lt;name&gt;</code> · <code>scn org list</code>. <a href="/#/new">New repository</a></p>
     </div></div>`,
     load: async (rerender) => {
       try {
@@ -1025,8 +1444,8 @@ function drawChrome() {
   if (!el) return;
   const items = [];
   const sep = () => html`<span class="sep">/</span>`;
-  if (parts[0] === 'orgs' || parts[0] === 'login' || parts[0] === 'new' || parts[0] === 'getting-started') {
-    const label = { orgs: 'orgs', login: 'sign in', new: 'new repository', 'getting-started': 'getting started' }[parts[0]];
+  if (parts[0] === 'orgs' || parts[0] === 'login' || parts[0] === 'new' || parts[0] === 'getting-started' || parts[0] === 'cli') {
+    const label = { orgs: 'orgs', login: 'sign in', new: 'new repository', 'getting-started': 'getting started', cli: 'download CLI' }[parts[0]];
     items.push(html`<span>${label}</span>`);
   } else if (parts.length >= 1) {
     const [org, repo, kind, ref, ...rest] = parts;
@@ -1090,6 +1509,7 @@ function parseLocation() {
 function routeFromParts(parts) {
   if (parts.length === 0) return { view: Home, title: 'ScionBase' };
   if (parts.length === 1 && parts[0] === 'getting-started') return { view: GettingStarted, title: 'Getting started — ScionBase' };
+  if (parts.length === 1 && parts[0] === 'cli') return { view: CliView, title: 'Download the CLI — ScionBase' };
   if (parts.length === 1 && parts[0] === 'orgs') return Object.assign(OrgsView(), { title: 'Organizations — ScionBase' });
   if (parts.length === 1 && parts[0] === 'login') return LoginView();
   if (parts.length === 1 && parts[0] === 'new') return NewRepoView();
@@ -1127,7 +1547,7 @@ function drawNav() {
   if (!el) return;
   const a = getAuth();
   const inner = a
-    ? html`<a class="btn btn-primary" href="/#/new">New</a><span class="nav-user">${a.username}</span><button class="btn btn-ghost" type="button" @click=${() => { setAuth(null); if (location.hash.startsWith('#/new') || location.hash.startsWith('#/login')) navigate('/#/'); else draw(); }}>Log out</button>`
+    ? html`<a class="btn btn-primary" href="/#/new">New</a><span class="nav-user">${meName() || a.username}</span><button class="btn btn-ghost" type="button" @click=${() => { setAuth(null); if (location.hash.startsWith('#/new') || location.hash.startsWith('#/login')) navigate('/#/'); else draw(); }}>Log out</button>`
     : html`<a class="btn btn-ghost" href="/#/login">Sign in</a>`;
   render(inner, el);
 }
@@ -1190,4 +1610,5 @@ function routeSoon() {
 window.addEventListener('popstate', routeSoon);
 window.addEventListener('hashchange', routeSoon);
 drawNav();
+if (getAuth()?.token) refreshMe();
 route();
