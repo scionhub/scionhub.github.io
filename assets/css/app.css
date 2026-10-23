@@ -77,6 +77,10 @@
 .md-body pre { background:#0f172a; color:#e2e8f0; padding:1rem; border-radius:8px; overflow-x:auto; }
 .md-body code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:.92em; }
 .md-body :not(pre) > code { background:rgba(127,127,127,.15); padding:.1em .35em; border-radius:4px; }
+.md-body img { max-width: 100%; height: auto; }
+.md-body table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+.md-body th, .md-body td { border: 1px solid var(--border); padding: .35rem .6rem; }
+.md-body blockquote { margin: .8rem 0; padding-left: .9rem; border-left: 3px solid var(--border); color: var(--muted); }
 .blob-frame { border:1px solid var(--border); border-radius:.6rem; overflow:auto; background:var(--panel); }
 .blob-table { width:100%; border-collapse:collapse; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:.82rem; line-height:1.45; }
 .blob-table .ln {
@@ -87,6 +91,23 @@
 .binary-note { padding:1rem; }
 .pr-item { grid-template-columns:1fr auto; gap:.35rem .8rem; }
 .pr-item .pr-meta { grid-column:1 / -1; color:var(--muted); font-size:.85rem; }
+.pr-detail h2 { margin: .2rem 0 .4rem; }
+.pr-meta-row { display:flex; flex-wrap:wrap; gap:.5rem 1rem; align-items:center; margin: .4rem 0 1rem; }
+.pr-actions { display:flex; gap:.5rem; flex-wrap:wrap; margin: .8rem 0 1.2rem; }
+.pr-state { text-transform: capitalize; }
+.diff-list { list-style: none; padding: 0; margin: 0 0 1rem; display: grid; gap: .35rem; }
+.diff-item { font-size: .9rem; }
+.diff-item .st { font-size: .75rem; margin-right: .4rem; text-transform: uppercase; }
+.diff-item .st.add { color: #3fb950; }
+.diff-item .st.del { color: #f85149; }
+.diff-item .st.mod { color: #d29922; }
+.diff-file { margin: .8rem 0 1.2rem; border: 1px solid var(--border); border-radius: .6rem; overflow: hidden; }
+.diff-file h4 { margin: 0; padding: .45rem .75rem; background: var(--panel-alt); font-size: .9rem; }
+.diff-hunk { margin: 0; background: #0d1117; color: #e6edf3; padding: .6rem .8rem; overflow-x: auto; font-size: .8rem; line-height: 1.45; }
+.diff-hunk .add { color: #3fb950; }
+.diff-hunk .del { color: #f85149; }
+.diff-hunk .meta { color: #8b949e; }
+.cli-panel { margin: 1.25rem 0 0; }
 .auth-grid { display:grid; grid-template-columns:1fr 1fr; gap:1rem; }
 @media (max-width: 800px) { .auth-grid { grid-template-columns:1fr; } }
 .form-error { color:#f85149; margin:.5rem 0 0; }
