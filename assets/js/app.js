@@ -526,34 +526,71 @@ function fileStatus(f) {
   return 'modified';
 }
 
+// Line diff: trim the common prefix/suffix, then Myers O(ND) on the middle.
+// Large files with small edits stay cheap; only very large rewrites fall back.
 function lcsDiffLines(aLines, bLines) {
   const n = aLines.length;
   const m = bLines.length;
+  let pre = 0;
+  while (pre < n && pre < m && aLines[pre] === bLines[pre]) pre += 1;
+  let suf = 0;
+  while (suf < n - pre && suf < m - pre && aLines[n - 1 - suf] === bLines[m - 1 - suf]) suf += 1;
   const out = [];
-  if (n > 800 || m > 800 || n * m > 250000) {
-    let oi = 1;
-    let ni = 1;
-    for (const s of aLines.slice(0, 40)) { out.push({ t: 'del', s, oldNo: oi, newNo: null }); oi += 1; }
-    for (const s of bLines.slice(0, 40)) { out.push({ t: 'add', s, oldNo: null, newNo: ni }); ni += 1; }
-    out.truncated = true;
-    return out;
+  for (let k = 0; k < pre; k += 1) out.push({ t: 'ctx', s: aLines[k], oldNo: k + 1, newNo: k + 1 });
+  const a = aLines.slice(pre, n - suf);
+  const b = bLines.slice(pre, m - suf);
+  const mid = myersDiff(a, b, 4000);
+  if (mid) {
+    for (const r of mid) {
+      out.push({ t: r.t, s: r.s, oldNo: r.oi == null ? null : r.oi + pre + 1, newNo: r.ni == null ? null : r.ni + pre + 1 });
+    }
+  } else {
+    a.forEach((s, k) => out.push({ t: 'del', s, oldNo: pre + k + 1, newNo: null }));
+    b.forEach((s, k) => out.push({ t: 'add', s, oldNo: null, newNo: pre + k + 1 }));
   }
-  const dp = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
-  for (let i = n - 1; i >= 0; i -= 1) {
-    for (let j = m - 1; j >= 0; j -= 1) {
-      dp[i][j] = aLines[i] === bLines[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  for (let k = 0; k < suf; k += 1) {
+    out.push({ t: 'ctx', s: aLines[n - suf + k], oldNo: n - suf + k + 1, newNo: m - suf + k + 1 });
+  }
+  return out;
+}
+
+function myersDiff(a, b, maxD) {
+  const n = a.length;
+  const m = b.length;
+  if (n === 0) return b.map((s, j) => ({ t: 'add', s, oi: null, ni: j }));
+  if (m === 0) return a.map((s, i) => ({ t: 'del', s, oi: i, ni: null }));
+  const max = Math.min(n + m, maxD);
+  const off = max + 1;
+  let v = new Int32Array(2 * max + 3);
+  const trace = [];
+  let found = false;
+  for (let d = 0; d <= max && !found; d += 1) {
+    trace.push(v.slice());
+    for (let k = -d; k <= d; k += 2) {
+      let x = (k === -d || (k !== d && v[off + k - 1] < v[off + k + 1])) ? v[off + k + 1] : v[off + k - 1] + 1;
+      let y = x - k;
+      while (x < n && y < m && a[x] === b[y]) { x += 1; y += 1; }
+      v[off + k] = x;
+      if (x >= n && y >= m) { found = true; break; }
     }
   }
-  let i = 0;
-  let j = 0;
-  while (i < n && j < m) {
-    if (aLines[i] === bLines[j]) { out.push({ t: 'ctx', s: aLines[i], oldNo: i + 1, newNo: j + 1 }); i += 1; j += 1; }
-    else if (dp[i + 1][j] >= dp[i][j + 1]) { out.push({ t: 'del', s: aLines[i], oldNo: i + 1, newNo: null }); i += 1; }
-    else { out.push({ t: 'add', s: bLines[j], oldNo: null, newNo: j + 1 }); j += 1; }
+  if (!found) return null;
+  const rows = [];
+  let x = n;
+  let y = m;
+  for (let d = trace.length - 1; d >= 0; d -= 1) {
+    const vv = trace[d];
+    const k = x - y;
+    const prevK = (k === -d || (k !== d && vv[off + k - 1] < vv[off + k + 1])) ? k + 1 : k - 1;
+    const px = vv[off + prevK];
+    const py = px - prevK;
+    while (x > px && y > py) { x -= 1; y -= 1; rows.push({ t: 'ctx', s: a[x], oi: x, ni: y }); }
+    if (d > 0) {
+      if (x === px) { y -= 1; rows.push({ t: 'add', s: b[y], oi: null, ni: y }); }
+      else { x -= 1; rows.push({ t: 'del', s: a[x], oi: x, ni: null }); }
+    }
   }
-  while (i < n) { out.push({ t: 'del', s: aLines[i], oldNo: i + 1, newNo: null }); i += 1; }
-  while (j < m) { out.push({ t: 'add', s: bLines[j], oldNo: null, newNo: j + 1 }); j += 1; }
-  return out;
+  return rows.reverse();
 }
 
 function hunkifyDiff(lines, expanded = []) {
