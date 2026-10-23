@@ -113,7 +113,7 @@
 .diff-hunk .del { color: #f85149; }
 .diff-hunk .meta { color: #8b949e; }
 .diff-hunk-wrap { overflow:auto; background:#0d1117; }
-.diff-table { width:100%; border-collapse:collapse; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:.8rem; line-height:1.45; color:#e6edf3; }
+.diff-table { width:max-content; min-width:100%; border-collapse:collapse; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:.8rem; line-height:1.45; color:#e6edf3; }
 .diff-table td { padding:0 .55rem; vertical-align:top; }
 .diff-table .ln { width:1%; text-align:right; color:#6e7681; user-select:none; cursor:pointer; font-variant-numeric:tabular-nums; border-right:1px solid #21262d; }
 .diff-table .mark { width:1%; color:#8b949e; user-select:none; }
@@ -124,12 +124,14 @@
 .diff-table tr.diff-line.del { background: rgba(248,81,73,.18); }
 .diff-table tr.diff-line.del .mark { color:#f85149; }
 .diff-table tr.diff-line:hover { outline:1px solid #30363d; }
-.diff-table tr.gap td { text-align:center; background:#161b22; padding:.2rem; }
+.diff-expand-bar { background:#161b22; border-top:1px solid #30363d; border-bottom:1px solid #30363d; }
 .diff-expand {
-  font:inherit; font-size:.8rem; color:#58a6ff; background:transparent; border:0; cursor:pointer; padding:.25rem .6rem;
+  display:block; width:100%; font:inherit; font-size:.82rem; font-weight:600; color:#58a6ff;
+  background:transparent; border:0; cursor:pointer; padding:.4rem .8rem; text-align:center;
 }
-.diff-expand:hover { text-decoration:underline; }
+.diff-expand:hover { text-decoration:underline; background:#1f242c; }
 .diff-table tr.comment-row td { white-space:normal; background:#161b22; padding:.6rem .75rem; cursor:default; }
+.pr-sticky { position:sticky; left:0; width:min(48rem, calc(100vw - 6rem)); }
 .pr-subtabs { display:flex; gap:0; border-bottom:1px solid var(--border); margin: 0 0 1rem; }
 .pr-subtabs a {
   padding:.55rem .95rem; color:var(--text); border-bottom:2px solid transparent; font-weight:600;

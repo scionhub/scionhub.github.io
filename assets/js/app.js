@@ -1593,9 +1593,9 @@ const RepoView = (org, repo, opts) => {
 
   const inlineForm = (path, line, side) => {
     const signedIn = !!getAuth()?.token;
-    if (!signedIn) return html`<tr class="comment-row"><td colspan="4">${signInHint()}</td></tr>`;
+    if (!signedIn) return html`<tr class="comment-row"><td colspan="4"><div class="pr-sticky">${signInHint()}</div></td></tr>`;
     const draft = st.inlineDraft;
-    return html`<tr class="comment-row"><td colspan="4">
+    return html`<tr class="comment-row"><td colspan="4"><div class="pr-sticky">
       <form class="form pr-inline-form" @submit=${submitInlineComment}>
         <textarea rows="3" placeholder="Comment" .value=${draft?.body || ''} @input=${(e) => { if (st.inlineDraft) st.inlineDraft.body = e.target.value; }}></textarea>
         <div class="form-actions">
@@ -1603,7 +1603,7 @@ const RepoView = (org, repo, opts) => {
           <button class="btn" type="button" @click=${() => { st.inlineDraft = null; draw(); }}>Cancel</button>
         </div>
       </form>
-    </td></tr>`;
+    </div></td></tr>`;
   };
 
   const diffLineRow = (filePath, ln) => {
@@ -1637,6 +1637,31 @@ const RepoView = (org, repo, opts) => {
       draw();
     };
     const blobHref = blobUrl(org, repo, headRef, row.path);
+    const lineBlock = (h) => {
+      const ln = h.row;
+      const side = ln.t === 'del' ? 'old' : 'new';
+      const line = side === 'old' ? ln.oldNo : ln.newNo;
+      const cms = lineComments(comments, row.path, line, side);
+      const draft = st.inlineDraft;
+      const showForm = draft && draft.path === row.path && draft.line === line && draft.side === side;
+      return html`${diffLineRow(row.path, ln)}
+        ${cms.map((c) => html`<tr class="comment-row"><td colspan="4"><div class="pr-sticky">${commentBlock(c)}</div></td></tr>`)}
+        ${showForm ? inlineForm(row.path, line, side) : nothing}`;
+    };
+    const blocks = [];
+    let buf = [];
+    const flush = () => {
+      if (!buf.length) return;
+      blocks.push(html`<table class="diff-table"><tbody>${buf}</tbody></table>`);
+      buf = [];
+    };
+    for (const h of hunks) {
+      if (h.kind === 'gap') {
+        flush();
+        blocks.push(html`<div class="diff-expand-bar"><button type="button" class="diff-expand" @click=${() => expand(h)}>Expand ${h.count} hidden line${h.count === 1 ? '' : 's'}</button></div>`);
+      } else buf.push(lineBlock(h));
+    }
+    flush();
     return html`<div class="diff-file">
       <div class="diff-file-head">
         <span class="st ${row.status === 'added' ? 'add' : row.status === 'removed' ? 'del' : 'mod'}">${row.status}</span>
@@ -1644,22 +1669,7 @@ const RepoView = (org, repo, opts) => {
         <a href=${blobHref} target="_blank" rel="noopener">View full file</a>
         ${row.skip ? html`<span class="tiny-note">${row.skip}</span>` : nothing}
       </div>
-      ${row.lines ? html`<div class="diff-hunk-wrap"><table class="diff-table">
-        <tbody>${hunks.map((h) => {
-          if (h.kind === 'gap') {
-            return html`<tr class="gap"><td colspan="4"><button type="button" class="diff-expand" @click=${() => expand(h)}>Expand ${h.count} hidden line${h.count === 1 ? '' : 's'}</button></td></tr>`;
-          }
-          const ln = h.row;
-          const side = ln.t === 'del' ? 'old' : 'new';
-          const line = side === 'old' ? ln.oldNo : ln.newNo;
-          const cms = lineComments(comments, row.path, line, side);
-          const draft = st.inlineDraft;
-          const showForm = draft && draft.path === row.path && draft.line === line && draft.side === side;
-          return html`${diffLineRow(row.path, ln)}
-            ${cms.map((c) => html`<tr class="comment-row"><td colspan="4">${commentBlock(c)}</td></tr>`)}
-            ${showForm ? inlineForm(row.path, line, side) : nothing}`;
-        })}</tbody>
-      </table></div>` : html`<p class="tiny-note" style="padding:.6rem .8rem">${row.skip || 'No diff.'}</p>`}
+      ${row.lines ? html`<div class="diff-hunk-wrap">${blocks}</div>` : html`<p class="tiny-note" style="padding:.6rem .8rem">${row.skip || 'No diff.'}</p>`}
     </div>`;
   };
 
@@ -1671,7 +1681,7 @@ const RepoView = (org, repo, opts) => {
       ${!st.diff ? html`<p class="muted">Loading diff…</p>`
         : st.diff.error ? html`<p class="muted">Could not load files (${base}…${head}): ${st.diff.error}</p>`
         : html`
-          <ul class="diff-list">${files.map((f) => html`<li class="diff-item"><span class="st ${f.status === 'added' ? 'add' : f.status === 'removed' ? 'del' : 'mod'}">${f.status}</span>${f.path}</li>`)}</ul>
+          <ul class="diff-list">${files.map((f) => html`<li class="diff-item"><span class="st ${f.status === 'added' ? 'add' : f.status === 'removed' ? 'del' : 'mod'}">${f.status}</span> ${f.path}</li>`)}</ul>
           ${st.diff.truncated ? html`<p class="tiny-note">Showing ${st.diff.rows?.length || 0} of ${st.diff.total} files.</p>` : nothing}
           ${(st.diff.rows || []).map((row) => fileDiffView(d, row))}
         `}
