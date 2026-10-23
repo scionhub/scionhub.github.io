@@ -1682,7 +1682,10 @@ const RepoView = (org, repo, opts) => {
     const signedIn = !!getAuth()?.token;
     const canApprove = signedIn && !isAuthor && open;
     const approved = iApproved(approvals);
-    const ownerApprovals = approvals.filter((a) => approvalIsOwner(a, owners));
+    const prAuthor = d.author || d.author_name || d.user || '';
+    const approvalCounts = (a) => approvalIsOwner(a, owners) && (a.user || a.author) !== prAuthor;
+    const ownerApprovals = approvals.filter(approvalCounts);
+    const needApprovals = (mergeLive0(st) && st.mergeability.data.requiredApprovals) || 1;
     const mergeLive = st.mergeability?.live === true && st.mergeability.data;
     const mergeBlocked = mergeLive && st.mergeability.data.mergeable === false;
     const mergeReasons = mergeLive
@@ -1732,15 +1735,16 @@ const RepoView = (org, repo, opts) => {
       </section>
       <section class="pr-approvals" aria-label="Approvals">
         <h3>Approvals</h3>
-        <p class="merge-note">Only approvals from repository owners count toward merge.</p>
+        <p class="merge-note">Only approvals from repository owners other than the author count toward merge. Required: ${needApprovals}.</p>
         ${!st.approvals ? html`<p class="muted">Loading approvals…</p>`
           : approvals.length ? html`<ul class="pr-approval-list">${approvals.map((a) => html`<li>
               <strong>${a.user || a.author || 'unknown'}</strong>
               ${approvalIsOwner(a, owners) ? html`<span class="owner-badge">owner</span>` : nothing}
+              ${approvalCounts(a) ? nothing : html`<span class="tiny-note">(does not count${approvalIsOwner(a, owners) ? ': author' : ': not an owner'})</span>`}
               <span class="tiny-note">${fmtTime(a.created_at)}</span>
             </li>`)}</ul>`
           : html`<p class="muted">${st.approvals.live === false && st.approvals.status === 404 ? 'Approvals are not available on this API yet.' : 'No approvals yet.'}</p>`}
-        ${ownerApprovals.length ? html`<p class="tiny-note">${ownerApprovals.length} owner approval${ownerApprovals.length === 1 ? '' : 's'}</p>` : nothing}
+        <p class="tiny-note">${ownerApprovals.length} of ${needApprovals} required owner approval${needApprovals === 1 ? '' : 's'}</p>
         ${canApprove ? html`<button class="btn ${approved ? '' : 'btn-primary'}" type="button" ?disabled=${st.approveBusy} @click=${toggleApproval}>${st.approveBusy ? 'Working…' : (approved ? 'Remove approval' : 'Approve')}</button>` : nothing}
       </section>
       ${open ? html`<div class="pr-actions">
@@ -1941,6 +1945,26 @@ const RepoView = (org, repo, opts) => {
     }
   }
 
+  function mergeLive0(st) { return st.mergeability?.live === true && st.mergeability.data; }
+  async function loadRepoSettings() {
+    if (st.repoSettingsLoading) return;
+    st.repoSettingsLoading = true;
+    st.repoSettings = await tryGet(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/settings`, null, { auth: true });
+    st.repoSettingsDraft = st.repoSettings?.data ? { ...st.repoSettings.data } : null;
+    draw();
+  }
+  async function saveRepoSettings(e) {
+    e.preventDefault();
+    const dr = st.repoSettingsDraft; if (!dr) return;
+    const n = Math.floor(Number(dr.requiredApprovals));
+    if (!(n >= 1 && n <= 10)) { st.settingsErr = 'Required approvals must be between 1 and 10.'; draw(); return; }
+    st.settingsBusy = true; st.settingsErr = ''; st.settingsMsg = ''; draw();
+    try {
+      const r = await api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/settings`, { method: 'PUT', auth: true, body: { protectMain: !!dr.protectMain, requiredApprovals: n } });
+      st.repoSettings = { live: true, data: r }; st.repoSettingsDraft = { ...r }; st.settingsMsg = 'Saved.';
+    } catch (err) { st.settingsErr = err?.message || String(err); }
+    st.settingsBusy = false; draw();
+  }
   const settingsTab = () => {
     if (!getAuth()?.token) {
       return html`<h2 style="margin-top:0">Settings</h2>
@@ -1964,6 +1988,22 @@ const RepoView = (org, repo, opts) => {
     const confirmOk = st.deleteConfirm === full;
     return html`
       <h2 style="margin-top:0">Settings</h2>
+      <section aria-label="Branch rules">
+        <h3>Branch rules</h3>
+        ${(() => { if (!st.repoSettings) { loadRepoSettings(); return html`<p class="muted">Loading…</p>`; }
+          const dr = st.repoSettingsDraft; if (!dr) return html`<p class="muted">Settings are not available on this API yet.</p>`;
+          return html`<form class="form" @submit=${saveRepoSettings}>
+          <label class="check-row"><input type="checkbox" .checked=${!!dr.protectMain} @change=${(e) => { dr.protectMain = e.target.checked; draw(); }} />
+            <span><strong>Protect main</strong><br><span class="tiny-note">Refuse direct pushes and ref changes to <code>main</code>; it changes only by merging a pull request. Cloning and reading are unaffected.</span></span></label>
+          <label for="req-approvals"><strong>Require approval</strong> <span class="badge">always on</span><br>
+            <span class="tiny-note">Owner approvals needed before a pull request can merge. The author's own approval never counts.</span></label>
+          <input id="req-approvals" type="number" min="1" max="10" step="1" style="max-width:6rem" .value=${String(dr.requiredApprovals)}
+            @input=${(e) => { dr.requiredApprovals = e.target.value; }} />
+          <div class="form-actions"><button class="btn btn-primary" type="submit" ?disabled=${st.settingsBusy}>${st.settingsBusy ? 'Saving…' : 'Save rules'}</button>
+            ${st.settingsMsg ? html`<span class="tiny-note">${st.settingsMsg}</span>` : nothing}</div>
+        </form>`; })()}
+        ${st.settingsErr ? html`<p class="form-error">${st.settingsErr}</p>` : nothing}
+      </section>
       <section aria-label="Owners">
         <h3>Owners</h3>
         ${!st.owners ? html`<p class="muted">Loading owners…</p>`
