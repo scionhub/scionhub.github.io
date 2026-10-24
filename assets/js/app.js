@@ -791,6 +791,8 @@ function formatMergeReason(reason) {
   if (s === 'at least one owner approval is required' || /owner approval is required/i.test(s)) {
     return 'Needs approval from a repo owner';
   }
+  if (/changes?_?requested/i.test(s)) return 'Changes requested by a reviewer';
+  if (/draft/i.test(s)) return 'Draft pull request';
   return s;
 }
 
@@ -1111,6 +1113,8 @@ const CiDocs = () => html`
     ${pre(['scn ci list --pr 3', 'scn ci log vet --pr 3', 'scn ci rerun vet --pr 3          # owners; ci.yml jobs only'])}
     <h2 id="completion">Shell completion</h2>
     <p><code>scn completion bash|zsh|fish</code> includes <code>ci</code> and <code>runner</code> and their flags.</p>
+    <h2 id="webhooks">Webhooks</h2>
+    <p>Integrate external systems with <strong>Webhooks</strong>. Configure them under <em>Repository → Settings → Webhooks</em>; choose events such as pushes, pull requests, issues or checks.</p>
     <h2 id="api">HTTP API</h2>
     ${pre(['GET  /v1/repos/{org}/{repo}/checks?pr=N | ?changeset=X | ?ref=main', 'POST /v1/repos/{org}/{repo}/checks            {name, state, pr|changeset|ref, summary, log, target_url}', 'GET  /v1/repos/{org}/{repo}/checks/{id}/log', 'POST /v1/repos/{org}/{repo}/checks/rerun      {name, pr|changeset}', 'GET|POST /v1/repos/{org}/{repo}/runners       (owners)', 'DELETE   /v1/repos/{org}/{repo}/runners/{name}', 'POST /v1/runners/poll                          (runner token, long-poll)', 'PATCH /v1/runners/jobs/{id}                    {state, log_append, summary}'])}
   </div></div>`;
@@ -1140,6 +1144,7 @@ const GettingStarted = () => html`
     <h2 id="pr">7. Pull requests</h2>
     <p>Merge is org member/admin; close is the author or an admin. Fast-forward when the head changeset’s first parent is still the current base.</p>
     ${pre(['scn pr create --title "My change"', 'scn pr create --title "My change" --body "details"', 'scn pr list', 'scn pr show 1', 'scn pr merge 1', 'scn pr close 1'])}
+    <p class="tiny-note">On the web: create a pull request (including <strong>draft</strong>), <strong>approve</strong> or <strong>request changes</strong>, and choose <strong>Fast‑forward</strong> or <strong>Squash</strong> when merging.</p>
     <h2 id="completion">8. Completion</h2>
     ${pre(['scn completion bash', 'scn completion zsh', 'scn completion fish'])}
     <p>Browse <a href="/#/orgs">organizations</a>.</p>
@@ -1331,6 +1336,7 @@ const RepoView = (org, repo, opts) => {
     readme: null,
     pulls: null,
     pull: null,
+    reviews: null,
     copied: false,
     cliTab: 'Clone',
     diff: null,
@@ -1369,6 +1375,20 @@ const RepoView = (org, repo, opts) => {
     checkLogs: {},
     checkBusy: '',
     openResolved: new Set(),
+    // PR create
+    prCreate: { base: opts.ref || 'main', head: '', title: '', body: '', draft: false, busy: false, err: '' },
+    mergeMethod: 'fast-forward',
+    // Issues
+    issues: null,
+    issueNo: opts.issue || null,
+    issue: null,
+    issueBusy: false,
+    issueErr: '',
+    issueDraft: { title: '', body: '', busy: false, err: '' },
+    // Fork
+    forkBusy: false,
+    forkErr: '',
+    forkApiMissing: false,
   };
   const cloneCmd = `scn clone ${full}`;
 
@@ -1551,10 +1571,34 @@ const RepoView = (org, repo, opts) => {
       </div>
     </div>
     ${st.kind === 'blob' ? blobView() : html`${fileTable()}${readmeView()}`}
+    ${forkPanel()}
     ${cliPanel()}`;
 
   function prApi(suffix, opts) {
     return api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/pulls/${encodeURIComponent(st.pullNo)}${suffix}`, opts);
+  }
+
+  async function toggleDraft(nextDraft) {
+    if (!st.pullNo || st.prBusy) return;
+    st.prErr = ''; st.prBusy = 'draft'; draw();
+    try {
+      if (nextDraft === false) {
+        try { await prApi('/ready', { method: 'POST', auth: true, body: {} }); }
+        catch { await prApi('', { method: 'PATCH', auth: true, body: { draft: false } }); }
+      } else {
+        try { await prApi('/draft', { method: 'POST', auth: true, body: {} }); }
+        catch { await prApi('', { method: 'PATCH', auth: true, body: { draft: true } }); }
+      }
+      const s = await tryGet(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/pulls/${encodeURIComponent(st.pullNo)}`, null, { auth: true });
+      st.pull = s;
+      st.prBusy = '';
+      await reloadMergeability();
+      draw();
+    } catch (e) {
+      st.prErr = e.message || String(e);
+      st.prBusy = '';
+      draw();
+    }
   }
 
   function isViewerOwner() {
@@ -1573,6 +1617,14 @@ const RepoView = (org, repo, opts) => {
   async function reloadApprovals() {
     const s = await tryGet(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/pulls/${encodeURIComponent(st.pullNo)}/approvals`, { approvals: [] }, { auth: true });
     st.approvals = s;
+  }
+  async function reloadReviews() {
+    try {
+      const s = await tryGet(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/pulls/${encodeURIComponent(st.pullNo)}/reviews`, { reviews: [] }, { auth: true });
+      st.reviews = s;
+    } catch {
+      st.reviews = { live: false, status: 404, data: { reviews: [] } };
+    }
   }
   async function reloadMergeability() {
     if (!st.pullNo) return;
@@ -1594,7 +1646,9 @@ const RepoView = (org, repo, opts) => {
     if (!st.pullNo || st.prBusy) return;
     st.prErr = ''; st.prBusy = verb; draw();
     try {
-      const data = await prApi(`/${verb}`, { method: 'POST', auth: true, body: {} });
+      const body = {};
+      if (verb === 'merge' && st.mergeMethod) body.method = st.mergeMethod;
+      const data = await prApi(`/${verb}`, { method: 'POST', auth: true, body });
       st.pull = { live: true, data };
       st.prBusy = '';
       if (verb === 'merge') await reloadMergeability();
@@ -1720,6 +1774,21 @@ const RepoView = (org, repo, opts) => {
       draw();
     }
   }
+  async function requestChanges() {
+    if (st.approveBusy) return;
+    st.commentErr = ''; st.approveBusy = true; draw();
+    try {
+      await prApi('/reviews', { method: 'POST', auth: true, body: { state: 'changes_requested' } });
+      await reloadReviews();
+      await reloadMergeability();
+      st.approveBusy = false;
+      draw();
+    } catch (err) {
+      st.commentErr = err.message || String(err);
+      st.approveBusy = false;
+      draw();
+    }
+  }
 
   const commentBlock = (c) => {
     const resolved = commentIsResolved(c);
@@ -1758,6 +1827,7 @@ const RepoView = (org, repo, opts) => {
     const base = d.base_ref || d.base || 'main';
     const state = d.state || 'open';
     const open = state === 'open';
+    const isDraft = d.draft === true || String(d.state || '').toLowerCase() === 'draft' || d.is_draft === true;
     const isAuthor = meIsPrAuthor(d);
     const viewer = st.info?.data?.viewer;
     const canMerge = open && (viewer && typeof viewer.canMerge === 'boolean'
@@ -1766,6 +1836,7 @@ const RepoView = (org, repo, opts) => {
     const canClose = open && (getMe()?.user?.admin || st.membership?.admin || isAuthor);
     const comments = asNamedList(st.comments?.data, 'comments').filter(isGeneralComment);
     const approvals = asNamedList(st.approvals?.data, 'approvals');
+    const reviews = asNamedList(st.reviews?.data, 'reviews').filter((r) => String(r.state || '').toLowerCase() === 'changes_requested');
     const owners = asNamedList(st.owners?.data, 'owners');
     const signedIn = !!getAuth()?.token;
     const canApprove = signedIn && !isAuthor && open;
@@ -1775,7 +1846,7 @@ const RepoView = (org, repo, opts) => {
     const ownerApprovals = approvals.filter(approvalCounts);
     const needApprovals = (mergeLive0(st) && st.mergeability.data.requiredApprovals) || 1;
     const mergeLive = st.mergeability?.live === true && st.mergeability.data;
-    const mergeBlocked = mergeLive && st.mergeability.data.mergeable === false;
+    const mergeBlocked = (isDraft) || (mergeLive && st.mergeability.data.mergeable === false);
     const mergeReasons = mergeLive
       ? (st.mergeability.data.reasons || []).map(formatMergeReason)
       : [];
@@ -1802,7 +1873,7 @@ const RepoView = (org, repo, opts) => {
             ${isAuthor ? html`<button class="btn" type="button" @click=${() => { st.editing = true; st.editTitle = d.title || ''; st.editBody = d.body || ''; draw(); }}>Edit</button>` : nothing}
           </div>
           <div class="pr-meta-row">
-            <span class="badge pr-state">${state}</span>
+            <span class="badge pr-state">${isDraft ? 'draft' : state}</span>
             <span>${author}</span>
             <span class="mono">${head} → ${base}</span>
             <span class="tiny-note">${fmtTime(d.created_at)}</span>
@@ -1822,9 +1893,16 @@ const RepoView = (org, repo, opts) => {
         </form>` : signInHint()}
       </section>
       ${checksSection(false)}
-      <section class="pr-approvals" aria-label="Approvals">
-        <h3>Approvals</h3>
+      <section class="pr-approvals" aria-label="Reviews and approvals">
+        <h3>Reviews and approvals</h3>
         <p class="merge-note">Only approvals from repository owners other than the author count toward merge. Required: ${needApprovals}.</p>
+        ${!st.reviews ? nothing
+          : (st.reviews.live === false && st.reviews.status === 404) ? html`<p class="muted">Reviews are not available on this API yet.</p>`
+          : reviews.length ? html`<ul class="pr-approval-list">${reviews.map((r) => html`<li>
+              <strong>${r.user || r.author || 'unknown'}</strong>
+              <span class="owner-badge">changes requested</span>
+              <span class="tiny-note">${fmtTime(r.created_at)}</span>
+            </li>`)}</ul>` : nothing}
         ${!st.approvals ? html`<p class="muted">Loading approvals…</p>`
           : approvals.length ? html`<ul class="pr-approval-list">${approvals.map((a) => html`<li>
               <strong>${a.user || a.author || 'unknown'}</strong>
@@ -1834,12 +1912,25 @@ const RepoView = (org, repo, opts) => {
             </li>`)}</ul>`
           : html`<p class="muted">${st.approvals.live === false && st.approvals.status === 404 ? 'Approvals are not available on this API yet.' : 'No approvals yet.'}</p>`}
         <p class="tiny-note">${ownerApprovals.length} of ${needApprovals} required owner approval${needApprovals === 1 ? '' : 's'}</p>
-        ${canApprove ? html`<button class="btn ${approved ? '' : 'btn-primary'}" type="button" ?disabled=${st.approveBusy} @click=${toggleApproval}>${st.approveBusy ? 'Working…' : (approved ? 'Remove approval' : 'Approve')}</button>` : nothing}
+        ${canApprove ? html`<div class="form-actions">
+          <button class="btn ${approved ? '' : 'btn-primary'}" type="button" ?disabled=${st.approveBusy} @click=${toggleApproval}>${st.approveBusy ? 'Working…' : (approved ? 'Remove approval' : 'Approve')}</button>
+          <button class="btn" type="button" ?disabled=${st.approveBusy} @click=${requestChanges}>${st.approveBusy ? 'Working…' : 'Request changes'}</button>
+        </div>` : nothing}
       </section>
       ${open ? html`<div class="pr-actions">
-        ${canMerge ? html`<button class="btn btn-primary" type="button" ?disabled=${!!st.prBusy || mergeBlocked} @click=${() => prAction('merge')}>${st.prBusy === 'merge' ? 'Merging…' : 'Merge'}</button>` : nothing}
+        ${canMerge ? html`
+          <label class="choice" style="margin-right:.5rem">
+            <span class="tiny-note">Merge method</span>
+            <select @change=${(e) => { st.mergeMethod = e.target.value; draw(); }}>
+              ${['fast-forward', 'squash'].map((m) => html`<option value=${m} ?selected=${st.mergeMethod === m}>${m === 'fast-forward' ? 'Fast-forward' : 'Squash'}</option>`)}
+            </select>
+          </label>
+          <button class="btn btn-primary" type="button" ?disabled=${!!st.prBusy || mergeBlocked} @click=${() => prAction('merge')}>${st.prBusy === 'merge' ? 'Merging…' : (st.mergeMethod === 'squash' ? 'Merge (Squash)' : 'Merge')}</button>` : nothing}
         ${canClose ? html`<button class="btn" type="button" ?disabled=${!!st.prBusy} @click=${() => prAction('close')}>${st.prBusy === 'close' ? 'Closing…' : 'Close'}</button>` : nothing}
         ${!canMerge && !canClose ? html`<p class="tiny-note">Sign in as an org member to merge, or as the author to close.</p>` : nothing}
+        ${isAuthor ? html`${isDraft
+            ? html`<button class="btn" type="button" ?disabled=${!!st.prBusy} @click=${() => toggleDraft(false)}>${st.prBusy === 'draft' ? 'Working…' : 'Ready for review'}</button>`
+            : html`<button class="btn" type="button" ?disabled=${!!st.prBusy} @click=${() => toggleDraft(true)}>${st.prBusy === 'draft' ? 'Working…' : 'Convert to draft'}</button>`}` : nothing}
       </div>
       ${mergeBlocked && mergeReasons.length ? html`<ul class="merge-reasons">${mergeReasons.map((r) => html`<li>${r}</li>`)}</ul>` : nothing}
       ${st.mergeability?.live === false && st.mergeability.status === 404 ? html`<p class="tiny-note">Mergeability checks are not available on this API yet.</p>` : nothing}` : nothing}
@@ -2032,6 +2123,48 @@ const RepoView = (org, repo, opts) => {
   };
 
   const pullsTab = () => {
+    if (st.pullNo === 'new') {
+      const bnames = [st.ref, ...((st.branches?.data?.branches || []).map((b) => (typeof b === 'string' ? b : b.name)))].filter((n, i, a) => n && a.indexOf(n) === i);
+      const f = st.prCreate;
+      const submit = async (e) => {
+        e.preventDefault();
+        if (f.busy) return;
+        f.err = ''; f.busy = true; draw();
+        try {
+          const payload = { title: String(f.title || '').trim(), body: String(f.body || ''), base: String(f.base || 'main'), head: String(f.head || ''), draft: !!f.draft };
+          if (!payload.title) throw new Error('title is required');
+          if (!payload.head) throw new Error('select a head branch');
+          const data = await api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/pulls`, { method: 'POST', auth: true, body: payload });
+          const num = data?.number || data?.id;
+          if (!num) throw new Error('pull create did not return a number');
+          navigate(repoUrl(org, repo, ['pulls', String(num)]));
+        } catch (e2) {
+          f.err = e2.message || String(e2);
+          f.busy = false; draw();
+        }
+      };
+      return html`<div class="narrow"><h2 style="margin-top:0">New pull request</h2>
+        <form class="card form" @submit=${submit}>
+          <label for="pr-base">Base branch</label>
+          <select id="pr-base" .value=${f.base} @change=${(e) => { f.base = e.target.value; draw(); }}>
+            ${bnames.map((n) => html`<option value=${n} ?selected=${n === f.base}>${n}</option>`)}
+          </select>
+          <label for="pr-head">Head branch</label>
+          <select id="pr-head" .value=${f.head} @change=${(e) => { f.head = e.target.value; draw(); }}>
+            ${bnames.map((n) => html`<option value=${n} ?selected=${n === f.head}>${n}</option>`)}
+          </select>
+          <label for="pr-title">Title</label>
+          <input id="pr-title" type="text" .value=${f.title} @input=${(e) => { f.title = e.target.value; }} required />
+          <label for="pr-body">Description</label>
+          <textarea id="pr-body" rows="6" .value=${f.body} @input=${(e) => { f.body = e.target.value; }}></textarea>
+          <label class="choice"><input type="checkbox" .checked=${!!f.draft} @change=${(e) => { f.draft = e.target.checked; draw(); }} /> Create as draft</label>
+          <div class="form-actions">
+            <button class="btn btn-primary" type="submit" ?disabled=${f.busy}>${f.busy ? 'Creating…' : 'Create pull request'}</button>
+            <a class="btn" href=${repoUrl(org, repo, ['pulls'])}>Cancel</a>
+          </div>
+          ${f.err ? html`<p class="form-error">${f.err}</p>` : nothing}
+        </form></div>`;
+    }
     if (st.pullNo) {
       const p = st.pull;
       if (!p) return html`<p class="muted">Loading pull request…</p>`;
@@ -2049,17 +2182,56 @@ const RepoView = (org, repo, opts) => {
     }
     const rows = pullList(st.pulls).filter((p) => (p.state || 'open') === 'open');
     return html`
-      <h2 style="margin-top:0">Open pull requests</h2>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap;">
+        <h2 style="margin:.2rem 0">Open pull requests</h2>
+        ${getAuth()?.token ? html`<a class="btn btn-primary" href=${repoUrl(org, repo, ['pulls', 'new'])}>New pull request</a>` : nothing}
+      </div>
       ${!st.pulls ? html`<p class="muted">Loading…</p>`
         : !st.pulls.live ? html`<p class="muted">Couldn't load pull requests (${st.pulls.error}). Try <code>scn pr list</code>.</p>`
         : rows.length ? html`<ul class="repo-list">${rows.map((p) => html`<li class="repo-item pr-item">
             <a href=${repoUrl(org, repo, ['pulls', String(p.number)])}><strong>#${p.number}</strong> ${p.title}</a>
-            <span class="badge">${p.state || 'open'}</span>
+            <span class="badge">${(p.draft === true || String(p.state || '').toLowerCase() === 'draft') ? 'draft' : (p.state || 'open')}</span>
             <span class="pr-meta">${p.author || p.author_name || 'unknown'} · ${p.head_ref || p.head || ''} → ${p.base_ref || p.base || 'main'} · ${fmtTime(p.created_at)}</span>
           </li>`)}</ul>`
         : html`<p class="muted">No open pull requests.</p>`}
       ${cliPanel()}`;
   };
+
+  function forkPanel() {
+    const authed = !!getAuth()?.token;
+    const owner = isViewerOwner();
+    if (!authed || owner) return nothing;
+    const tryFork = async () => {
+      if (st.forkBusy) return;
+      st.forkErr = ''; st.forkBusy = true; draw();
+      try {
+        const data = await api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/forks`, { method: 'POST', auth: true, body: {} });
+        const o = data?.org || data?.owner || data?.namespace || getAuth()?.username;
+        const r = data?.name || repo;
+        if (o) navigate(repoUrl(o, r));
+        else st.forkErr = 'Fork created, but could not determine URL';
+      } catch (e) {
+        if (e.status === 404 || e.status === 405) { st.forkApiMissing = true; st.forkErr = ''; }
+        else st.forkErr = e.message || String(e);
+      }
+      st.forkBusy = false; draw();
+    };
+    const contributeBox = () => {
+      const you = meName() || 'you';
+      const sample = `users/${you}/my-change`;
+      return html`<div class="card" style="margin-top:.75rem">
+        <h3 style="margin:.2rem 0">Contribute without a fork</h3>
+        <p class="tiny-note">Create a branch under <code>users/${you}/…</code> in this repo, push your changes, then open a pull request.</p>
+        ${pre([ENV, `scn clone ${full}`, `cd ${repo}`, `scn branch new ${sample} --from ${st.ref}`, 'scn branch switch ' + sample, '# edit files', 'scn push -m "describe the change"', `# then open a PR on the web: ${location.origin}${repoUrl(org, repo, ['pulls', 'new'])}`])}
+        <p class="tiny-note">In the PR form, choose base <code>${st.ref}</code> and head <code>${sample}</code>.</p>
+      </div>`;
+    };
+    return html`<div style="margin:.9rem 0 0">
+      ${!st.forkApiMissing ? html`<button class="btn" type="button" @click=${tryFork} ?disabled=${st.forkBusy}>${st.forkBusy ? 'Forking…' : 'Fork'}</button>` : nothing}
+      ${st.forkErr ? html`<p class="form-error">${st.forkErr}</p>` : nothing}
+      ${st.forkApiMissing ? contributeBox() : nothing}
+    </div>`;
+  }
 
   async function addOwner(e) {
     e.preventDefault();
@@ -2173,6 +2345,60 @@ const RepoView = (org, repo, opts) => {
       ${st.runnerErr ? html`<p class="form-error">${st.runnerErr}</p>` : nothing}
     </section>`;
   };
+
+  async function loadWebhooks() {
+    try {
+      st.webhooks = await tryGet(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/webhooks`, { webhooks: [] }, { auth: true });
+    } catch {
+      st.webhooks = { live: false, status: 404, data: { webhooks: [] } };
+    }
+    draw();
+  }
+  async function addWebhook(e) {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    st.webhookErr = ''; st.webhookBusy = true; draw();
+    try {
+      const url = String(fd.get('url') || '').trim();
+      const secret = String(fd.get('secret') || '').trim();
+      const events = Array.from(e.target.querySelectorAll('input[name="ev"]:checked')).map((n) => n.value);
+      await api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/webhooks`, { method: 'POST', auth: true, body: { url, secret: secret || undefined, events } });
+      e.target.reset();
+      await loadWebhooks();
+      st.webhookBusy = false; draw();
+    } catch (err) { st.webhookErr = err?.message || String(err); st.webhookBusy = false; draw(); }
+  }
+  async function removeWebhook(id) {
+    try {
+      await api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/webhooks/${encodeURIComponent(id)}`, { method: 'DELETE', auth: true });
+      await loadWebhooks();
+    } catch (err) { st.webhookErr = err?.message || String(err); draw(); }
+  }
+  function webhooksSection() {
+    if (!st.webhooks) { loadWebhooks(); return html`<section aria-label="Webhooks"><h3>Webhooks</h3><p class="muted">Loading…</p></section>`; }
+    if (st.webhooks.live === false && (st.webhooks.status === 404 || st.webhooks.status === 405)) {
+      return html`<section aria-label="Webhooks"><h3>Webhooks</h3><p class="muted">Webhooks are not available on this API yet.</p></section>`;
+    }
+    const list = st.webhooks?.data?.webhooks || st.webhooks?.data?.hooks || [];
+    return html`<section aria-label="Webhooks">
+      <h3>Webhooks</h3>
+      ${list.length ? html`<ul class="owner-list">${list.map((h) => html`<li>
+        <span><strong>${h.url}</strong> ${Array.isArray(h.events) && h.events.length ? html`<span class="tiny-note">${h.events.join(', ')}</span>` : nothing}</span>
+        <button class="btn btn-ghost btn-tiny" type="button" @click=${() => removeWebhook(h.id)}>Delete</button>
+      </li>`)}</ul>` : html`<p class="muted">No webhooks configured.</p>`}
+      <form class="form" @submit=${addWebhook}>
+        <label for="wh-url">URL</label>
+        <input id="wh-url" name="url" type="url" required placeholder="https://example.com/webhook" />
+        <label for="wh-secret">Secret (optional)</label>
+        <input id="wh-secret" name="secret" type="text" placeholder="signing secret" />
+        <div class="choices">
+          ${['push', 'pulls', 'issues', 'checks'].map((ev) => html`<label class="choice"><input type="checkbox" name="ev" value=${ev} /> ${ev}</label>`)}
+        </div>
+        <div class="form-actions"><button class="btn btn-primary" type="submit" ?disabled=${st.webhookBusy}>${st.webhookBusy ? 'Saving…' : 'Add webhook'}</button></div>
+        ${st.webhookErr ? html`<p class="form-error">${st.webhookErr}</p>` : nothing}
+      </form>
+    </section>`;
+  }
   async function saveRepoSettings(e) {
     e.preventDefault();
     const dr = st.repoSettingsDraft; if (!dr) return;
@@ -2281,12 +2507,90 @@ const RepoView = (org, repo, opts) => {
     <div class="page"><div class="container">
       <nav class="repo-tabs" aria-label="Repository">
         <a href=${repoUrl(org, repo)} aria-current=${st.tab === 'code' ? 'page' : nothing}>Code</a>
+        <a href=${repoUrl(org, repo, ['issues'])} aria-current=${st.tab === 'issues' ? 'page' : nothing}>Issues</a>
         <a href=${repoUrl(org, repo, ['pulls'])} aria-current=${st.tab === 'pulls' ? 'page' : nothing}>Pull requests</a>
         <a href=${repoUrl(org, repo, ['sync'])} aria-current=${st.tab === 'sync' ? 'page' : nothing}>Sync</a>
         ${isViewerOwner() ? html`<a href=${repoUrl(org, repo, ['settings'])} aria-current=${st.tab === 'settings' ? 'page' : nothing}>Settings</a>` : nothing}
       </nav>
-      ${st.tab === 'pulls' ? pullsTab() : st.tab === 'sync' ? syncTab() : st.tab === 'settings' ? settingsTab() : codeTab()}
+      ${st.tab === 'pulls' ? pullsTab() : st.tab === 'issues' ? issuesTab() : st.tab === 'sync' ? syncTab() : st.tab === 'settings' ? settingsTab() : codeTab()}
     </div></div>`;
+
+  const issuesTab = () => {
+    if (st.issueNo) {
+      const it = st.issue;
+      if (!it) return html`<p class="muted">Loading issue…</p>`;
+      if (!it.live) return html`<p class="muted">Could not load #${st.issueNo}: ${it.error}</p>`;
+      const d = it.data || {};
+      const state = String(d.state || 'open');
+      const open = state === 'open';
+      const canToggle = isViewerOwner();
+      const toggle = async () => {
+        if (!canToggle || st.issueBusy) return;
+        st.issueErr = ''; st.issueBusy = true; draw();
+        try {
+          const body = { state: open ? 'closed' : 'open' };
+          const data = await api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/issues/${encodeURIComponent(st.issueNo)}`, { method: 'PATCH', auth: true, body });
+          st.issue = { live: true, data };
+        } catch (e) { st.issueErr = e.message || String(e); }
+        st.issueBusy = false; draw();
+      };
+      return html`<div class="pr-detail">
+        <p><a href=${repoUrl(org, repo, ['issues'])}>← Issues</a></p>
+        <div class="card pr-title-box">
+          <div class="pr-title-row">
+            <h2>#${d.number ?? st.issueNo} ${d.title || ''}</h2>
+          </div>
+          <div class="pr-meta-row">
+            <span class="badge pr-state">${state}</span>
+            <span>${d.author || d.user || d.author_name || 'unknown'}</span>
+            <span class="tiny-note">${fmtTime(d.created_at)}</span>
+          </div>
+          ${d.body ? html`<div class="md-body">${(() => { const r = renderMarkdown(d.body, { org, repo, ref: st.ref, dir: '' }); return r.template; })()}</div>` : html`<p class="muted">No description.</p>`}
+          <div class="pr-actions">
+            ${canToggle ? html`<button class="btn" type="button" ?disabled=${st.issueBusy} @click=${toggle}>${st.issueBusy ? 'Working…' : (open ? 'Close' : 'Reopen')}</button>` : nothing}
+          </div>
+          ${st.issueErr ? html`<p class="form-error">${st.issueErr}</p>` : nothing}
+        </div>
+      </div>`;
+    }
+    const list = Array.isArray(st.issues?.data) ? st.issues?.data : st.issues?.data?.issues || [];
+    const f = st.issueDraft;
+    const submit = async (e) => {
+      e.preventDefault();
+      if (f.busy) return;
+      f.err = ''; f.busy = true; draw();
+      try {
+        const payload = { title: String(f.title || '').trim(), body: String(f.body || '') };
+        if (!payload.title) throw new Error('title is required');
+        const data = await api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/issues`, { method: 'POST', auth: true, body: payload });
+        const num = data?.number || data?.id;
+        if (!num) throw new Error('issue create did not return a number');
+        navigate(repoUrl(org, repo, ['issues', String(num)]));
+      } catch (e2) { f.err = e2.message || String(e2); f.busy = false; draw(); }
+    };
+    return html`
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap;">
+        <h2 style="margin:.2rem 0">Open issues</h2>
+      </div>
+      ${!st.issues ? html`<p class="muted">Loading…</p>`
+        : st.issues.live === false && (st.issues.status === 404 || st.issues.status === 405) ? html`<p class="muted">Issues are not available on this API yet.</p>`
+        : list.length ? html`<ul class="repo-list">${list.filter((i) => (i.state || 'open') === 'open').map((i) => html`<li class="repo-item">
+            <a href=${repoUrl(org, repo, ['issues', String(i.number)])}><strong>#${i.number}</strong> ${i.title}</a>
+            <span class="badge">${i.state || 'open'}</span>
+          </li>`)}</ul>` : html`<p class="muted">No open issues.</p>`}
+      ${getAuth()?.token ? html`<form class="card form" style="margin-top:1rem" @submit=${submit}>
+        <h3 style="margin:.2rem 0">New issue</h3>
+        <label for="is-title">Title</label>
+        <input id="is-title" type="text" .value=${f.title} @input=${(e) => { f.title = e.target.value; }} required />
+        <label for="is-body">Description</label>
+        <textarea id="is-body" rows="6" .value=${f.body} @input=${(e) => { f.body = e.target.value; }}></textarea>
+        <div class="form-actions">
+          <button class="btn btn-primary" type="submit" ?disabled=${f.busy}>${f.busy ? 'Creating…' : 'Create issue'}</button>
+        </div>
+        ${f.err ? html`<p class="form-error">${f.err}</p>` : nothing}
+      </form>` : html`<p class="tiny-note" style="margin-top:1rem"><a href="/#/login">Sign in</a> to create an issue.</p>`}
+    `;
+  };
 
   return {
     view,
@@ -2308,7 +2612,7 @@ const RepoView = (org, repo, opts) => {
             .then((m) => { st.membership = m; rerender(); })
             .catch(() => {});
         }
-        if (st.pullNo) {
+        if (st.pullNo && st.pullNo !== 'new') {
           tryGet(`${b}/pulls/${encodeURIComponent(st.pullNo)}`, null).then(async (s) => {
             st.pull = s;
             rerender();
@@ -2318,10 +2622,12 @@ const RepoView = (org, repo, opts) => {
               tryGet(`${b}/pulls/${encodeURIComponent(st.pullNo)}/comments`, { comments: [] }, { auth: true }),
               tryGet(`${b}/pulls/${encodeURIComponent(st.pullNo)}/approvals`, { approvals: [] }, { auth: true }),
               tryGet(`${b}/pulls/${encodeURIComponent(st.pullNo)}/mergeability`, null, { auth: true }),
-            ]).then(([c, a, m]) => {
+              tryGet(`${b}/pulls/${encodeURIComponent(st.pullNo)}/reviews`, { reviews: [] }, { auth: true }).catch(() => ({ live: false, status: 404, data: { reviews: [] } })),
+            ]).then(([c, a, m, r]) => {
               st.comments = c;
               st.approvals = a;
               st.mergeability = m;
+              st.reviews = r;
               rerender();
             });
             loadChecks();
@@ -2343,6 +2649,14 @@ const RepoView = (org, repo, opts) => {
           });
         } else {
           tryGet(`${b}/pulls`, { pulls: [] }).then((s) => { st.pulls = s; rerender(); });
+        }
+        return;
+      }
+      if (st.tab === 'issues') {
+        if (st.issueNo) {
+          tryGet(`${b}/issues/${encodeURIComponent(st.issueNo)}`, null, { auth: authed }).then((s) => { st.issue = s; rerender(); });
+        } else {
+          tryGet(`${b}/issues`, { issues: [] }, { auth: authed }).then((s) => { st.issues = s; rerender(); });
         }
         return;
       }
@@ -2509,7 +2823,8 @@ function drawChrome() {
       items.push(html`<a href=${repoUrl(org, repo, ['pulls'])}>pulls</a>`);
       if (ref) {
         items.push(sep());
-        items.push(html`<a href=${repoUrl(org, repo, ['pulls', ref])}>#${ref}</a>`);
+        const isNum = /^\d+$/.test(ref || '');
+        items.push(html`<a href=${repoUrl(org, repo, ['pulls', ref])}>${isNum ? `#${ref}` : ref}</a>`);
         if (rest[0] === 'files' || rest[0] === 'conversation') {
           items.push(sep());
           items.push(html`<span>${rest[0]}</span>`);
@@ -2590,9 +2905,15 @@ function routeFromParts(parts) {
   if (parts.length === 2) return Object.assign(RepoView(org, repo, { tab: 'code', kind: 'tree', ref: 'main', path: '' }), { title });
   const third = parts[2];
   if (third === 'pulls') {
-    const n = parts[3] && /^\d+$/.test(parts[3]) ? parts[3] : null;
+    const n = parts[3] === 'new' ? 'new' : (parts[3] && /^\d+$/.test(parts[3]) ? parts[3] : null);
     const prTab = n && parts[4] === 'files' ? 'files' : 'conversation';
-    return Object.assign(RepoView(org, repo, { tab: 'pulls', pull: n, prTab }), { title: n ? `${org}/${repo} #${n} — ScionBase` : title });
+    const t = n && n !== 'new' ? `${org}/${repo} #${n} — ScionBase` : title;
+    return Object.assign(RepoView(org, repo, { tab: 'pulls', pull: n, prTab }), { title: t });
+  }
+  if (third === 'issues') {
+    const n = parts[3] && /^\d+$/.test(parts[3]) ? parts[3] : null;
+    const t = n ? `${org}/${repo} #${n} — ScionBase` : title;
+    return Object.assign(RepoView(org, repo, { tab: 'issues', issue: n }), { title: t });
   }
   if (third === 'sync') {
     return Object.assign(RepoView(org, repo, { tab: 'sync' }), { title });
