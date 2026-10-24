@@ -188,6 +188,17 @@ function fmtTime(v) {
   const d = new Date(ms);
   return Number.isNaN(d.getTime()) ? String(v) : d.toLocaleString();
 }
+
+// Parse a comma/space separated list of integers like "12, 15  20"
+function parseNumberList(text) {
+  if (!text) return [];
+  return String(text)
+    .split(/[,\s]+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length > 0 && /^\d+$/.test(t))
+    .map((t) => parseInt(t, 10))
+    .filter((n, i, a) => Number.isFinite(n) && a.indexOf(n) === i);
+}
 function shortId(id) {
   const s = String(id || '');
   return s.length > 12 ? s.slice(0, 8) : s;
@@ -1145,6 +1156,7 @@ const GettingStarted = () => html`
     <p>Merge is org member/admin; close is the author or an admin. Fast-forward when the head changeset’s first parent is still the current base.</p>
     ${pre(['scn pr create --title "My change"', 'scn pr create --title "My change" --body "details"', 'scn pr list', 'scn pr show 1', 'scn pr merge 1', 'scn pr close 1'])}
     <p class="tiny-note">On the web: create a pull request (including <strong>draft</strong>), <strong>approve</strong> or <strong>request changes</strong>, and choose <strong>Fast‑forward</strong> or <strong>Squash</strong> when merging.</p>
+    <p class="tiny-note"><strong>Fixes</strong>: add issue numbers (e.g. <code>12, 15</code>) to a PR to close those issues automatically when it merges. <strong>Issues</strong> can include a short <em>tag</em> on create/edit and the Issues list supports filtering by <code>?tag=</code>. Use <strong>Boards</strong> to save a repo+tag filter and see matching issues at a glance.</p>
     <h2 id="completion">8. Completion</h2>
     ${pre(['scn completion bash', 'scn completion zsh', 'scn completion fish'])}
     <p>Browse <a href="/#/orgs">organizations</a>.</p>
@@ -1319,6 +1331,141 @@ const OrgView = (org) => {
   } };
 };
 
+/* ---------- Boards ---------- */
+const BoardsView = () => {
+  const st = { boards: null, err: '', formErr: '', busy: false, orgs: null, repos: [], orgSel: '', repoSel: '', name: '', tag: '' };
+  async function loadReposFor(org) {
+    st.repos = [];
+    if (!org) return;
+    try {
+      const d = await api(`/v1/orgs/${encodeURIComponent(org)}/repos`);
+      const list = Array.isArray(d) ? d : d?.repos || [];
+      st.repos = list.map((r) => (typeof r === 'string' ? r : r.name));
+    } catch { st.repos = []; }
+    draw();
+  }
+  async function onCreate(e) {
+    e.preventDefault();
+    if (st.busy) return;
+    st.formErr = ''; st.busy = true; draw();
+    try {
+      const name = String(st.name || '').trim();
+      const org = String(st.orgSel || '').trim();
+      const repo = String(st.repoSel || '').trim();
+      const tag = String(st.tag || '').trim();
+      if (!name) throw new Error('name is required');
+      if (!org || !repo) throw new Error('select an org and repo');
+      const body = { name, org, repo };
+      if (tag) body.tag = tag;
+      const data = await api('/v1/boards', { method: 'POST', auth: true, body });
+      const id = data?.id || data?.number || data?.name || '';
+      if (!id) throw new Error('board create did not return an id');
+      navigate(`/#/boards/${encodeURIComponent(id)}`);
+    } catch (err) { st.formErr = err.message || String(err); st.busy = false; draw(); }
+  }
+  return {
+    view: () => html`<div class="page"><div class="container">
+      <h1>Boards</h1>
+      ${getAuth() ? html`<form class="card form" style="max-width:34rem;margin:0 0 1.25rem" @submit=${onCreate}>
+        <h2 style="margin-top:0">New board</h2>
+        <label for="bd-name">Name</label>
+        <input id="bd-name" type="text" .value=${st.name} @input=${(e) => { st.name = e.target.value; }} required />
+        <div style="display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap">
+          <label style="flex:1;min-width:10rem">Org
+            <select .value=${st.orgSel} @change=${(e) => { st.orgSel = e.target.value; st.repoSel=''; loadReposFor(st.orgSel); }}>
+              <option value="">—</option>
+              ${(st.orgs || []).map((o) => html`<option value=${o} ?selected=${o === st.orgSel}>${o}</option>`)}
+            </select>
+          </label>
+          <label style="flex:1;min-width:10rem">Repo
+            <select .value=${st.repoSel} @change=${(e) => { st.repoSel = e.target.value; }}>
+              <option value="">—</option>
+              ${st.repos.map((r) => html`<option value=${r} ?selected=${r === st.repoSel}>${r}</option>`)}
+            </select>
+          </label>
+        </div>
+        <label for="bd-tag">Tag <span class="tiny-note">optional</span></label>
+        <input id="bd-tag" type="text" placeholder="ui, infra, urgent" .value=${st.tag} @input=${(e) => { st.tag = e.target.value; }} />
+        <div class="form-actions"><button class="btn btn-primary" type="submit" ?disabled=${st.busy}>${st.busy ? 'Creating…' : 'Create board'}</button></div>
+        ${st.formErr ? html`<p class="form-error">${st.formErr}</p>` : nothing}
+      </form>` : html`<p class="tiny-note"><a href="/#/login">Sign in</a> to create a board.</p>`}
+      ${!st.boards ? html`<p class="muted">${st.err || 'Loading boards…'}</p>`
+        : st.boards.live === false && (st.boards.status === 404 || st.boards.status === 405) ? html`<p class="muted">Boards are not available on this API yet.</p>`
+        : (Array.isArray(st.boards.data) ? st.boards.data : (st.boards.data?.boards || [])).length
+          ? html`<ul class="repo-list">${(Array.isArray(st.boards.data) ? st.boards.data : st.boards.data.boards).map((b) => {
+              const id = b.id || b.number || b.name;
+              return html`<li class="repo-item">
+                <a href=${`/#/boards/${encodeURIComponent(id)}`}><strong>${b.name || id}</strong></a>
+                <span class="tiny-note">${b.org}/${b.repo}${b.tag ? ` · tag: ${b.tag}` : ''}</span>
+              </li>`;
+            })}</ul>`
+          : html`<p class="muted">No boards yet.</p>`}
+    </div></div>`,
+    load: async (rerender) => {
+      try {
+        const d = await tryGet('/v1/boards', { boards: [] }, { auth: true });
+        st.boards = d;
+      } catch { st.boards = { live: false, status: 404, data: { boards: [] } }; }
+      try {
+        const o = await api('/v1/orgs');
+        const list = Array.isArray(o) ? o : (o?.orgs || []);
+        st.orgs = list.map((x) => (typeof x === 'string' ? x : x.name));
+      } catch { st.orgs = []; }
+      rerender();
+    },
+  };
+};
+
+const BoardView = (id) => {
+  const st = { s: null, err: '', delBusy: false, delErr: '' };
+  async function onDelete() {
+    if (st.delBusy) return;
+    if (!confirm('Delete this board?')) return;
+    st.delErr = ''; st.delBusy = true; draw();
+    try {
+      await api(`/v1/boards/${encodeURIComponent(id)}`, { method: 'DELETE', auth: true });
+      navigate('/#/boards');
+    } catch (e) {
+      st.delErr = e.message || String(e);
+      st.delBusy = false; draw();
+    }
+  }
+  return {
+    view: () => {
+      const d = st.s?.data || {};
+      const issues = Array.isArray(st.s?.data) ? st.s?.data : (d.issues || []);
+      const head = d.name ? `${d.name}` : `Board ${id}`;
+      return html`<div class="page"><div class="container">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap;">
+          <h1 style="margin:.2rem 0">${head}</h1>
+          <div>
+            <a class="btn" href="/#/boards">All boards</a>
+            <button class="btn" type="button" ?disabled=${st.delBusy} @click=${onDelete}>${st.delBusy ? 'Deleting…' : 'Delete board'}</button>
+          </div>
+        </div>
+        ${d.org && d.repo ? html`<p class="tiny-note">${d.org}/${d.repo}${d.tag ? ` · tag: ${d.tag}` : ''}</p>` : nothing}
+        ${!st.s ? html`<p class="muted">${st.err || 'Loading board…'}</p>`
+          : st.s.live === false && (st.s.status === 404 || st.s.status === 405) ? html`<p class="muted">Boards are not available on this API yet.</p>`
+          : issues.length ? html`<ul class="repo-list">${issues
+              .filter((i) => (i.state || 'open') === 'open')
+              .map((i) => html`<li class="repo-item">
+                <a href=${repoUrl(i.org || d.org, i.repo || d.repo, ['issues', String(i.number)])}><strong>#${i.number}</strong> ${i.title}</a>
+                <span class="badge">${i.state || 'open'}</span>
+                ${i.tag ? html`<span class="tiny-note" style="margin-left:.25rem">tag: <strong>${i.tag}</strong></span>` : nothing}
+              </li>`)}</ul>` : html`<p class="muted">No matching open issues.</p>`}
+        ${st.delErr ? html`<p class="form-error">${st.delErr}</p>` : nothing}
+      </div></div>`;
+    },
+    load: async (rerender) => {
+      try {
+        const d = await tryGet(`/v1/boards/${encodeURIComponent(id)}`, { issues: [] }, { auth: true });
+        st.s = d;
+      } catch (e) { st.err = e.message || String(e); st.s = null; }
+      rerender();
+    },
+  };
+};
+
 function pullList(pulls) {
   if (!pulls) return [];
   const rows = Array.isArray(pulls.data) ? pulls.data : pulls.data?.pulls || [];
@@ -1376,7 +1523,7 @@ const RepoView = (org, repo, opts) => {
     checkBusy: '',
     openResolved: new Set(),
     // PR create
-    prCreate: { base: opts.ref || 'main', head: '', title: '', body: '', draft: false, busy: false, err: '' },
+    prCreate: { base: opts.ref || 'main', head: '', title: '', body: '', fixesText: '', draft: false, busy: false, err: '' },
     mergeMethod: 'fast-forward',
     // Issues
     issues: null,
@@ -1384,7 +1531,12 @@ const RepoView = (org, repo, opts) => {
     issue: null,
     issueBusy: false,
     issueErr: '',
-    issueDraft: { title: '', body: '', busy: false, err: '' },
+    issueDraft: { title: '', body: '', tag: '', busy: false, err: '' },
+    issueEditing: false,
+    issueEditTitle: '',
+    issueEditBody: '',
+    issueEditTag: '',
+    issueEditBusy: false,
     // Fork
     forkBusy: false,
     forkErr: '',
@@ -1666,7 +1818,10 @@ const RepoView = (org, repo, opts) => {
     if (st.editBusy) return;
     st.commentErr = ''; st.editBusy = true; draw();
     try {
-      const data = await prApi('', { method: 'PATCH', auth: true, body: { title: st.editTitle, body: st.editBody } });
+      const fixes = parseNumberList(st.editFixesText || '');
+      const body = { title: st.editTitle, body: st.editBody };
+      if (fixes.length) body.fixes = fixes;
+      const data = await prApi('', { method: 'PATCH', auth: true, body });
       st.pull = { live: true, data: { ...(st.pull?.data || {}), ...data } };
       st.editing = false;
       st.editBusy = false;
@@ -1863,6 +2018,8 @@ const RepoView = (org, repo, opts) => {
             <input id="pr-edit-title" type="text" .value=${st.editTitle} @input=${(e) => { st.editTitle = e.target.value; }} required />
             <label for="pr-edit-body">Description</label>
             <textarea id="pr-edit-body" rows="8" .value=${st.editBody} @input=${(e) => { st.editBody = e.target.value; }}></textarea>
+            <label for="pr-edit-fixes"><strong>Fixes</strong> <span class="tiny-note">issue numbers, comma- or space-separated</span></label>
+            <input id="pr-edit-fixes" type="text" placeholder="12, 15" .value=${st.editFixesText || ''} @input=${(e) => { st.editFixesText = e.target.value; }} />
             <div class="form-actions">
               <button class="btn btn-primary" type="submit" ?disabled=${st.editBusy}>${st.editBusy ? 'Saving…' : 'Save'}</button>
               <button class="btn" type="button" @click=${() => { st.editing = false; draw(); }}>Cancel</button>
@@ -1870,7 +2027,7 @@ const RepoView = (org, repo, opts) => {
           </form>` : html`
           <div class="pr-title-row">
             <h2>#${d.number ?? st.pullNo} ${d.title || ''}</h2>
-            ${isAuthor ? html`<button class="btn" type="button" @click=${() => { st.editing = true; st.editTitle = d.title || ''; st.editBody = d.body || ''; draw(); }}>Edit</button>` : nothing}
+            ${isAuthor ? html`<button class="btn" type="button" @click=${() => { st.editing = true; st.editTitle = d.title || ''; st.editBody = d.body || ''; st.editFixesText = Array.isArray(d.fixes) ? d.fixes.join(', ') : ''; draw(); }}>Edit</button>` : nothing}
           </div>
           <div class="pr-meta-row">
             <span class="badge pr-state">${isDraft ? 'draft' : state}</span>
@@ -1878,6 +2035,10 @@ const RepoView = (org, repo, opts) => {
             <span class="mono">${head} → ${base}</span>
             <span class="tiny-note">${fmtTime(d.created_at)}</span>
           </div>
+          ${Array.isArray(d.fixes) && d.fixes.length ? html`<p class="tiny-note">
+            Fixes: ${d.fixes.map((n, i) => html`${i ? ', ' : nothing}<a href=${repoUrl(org, repo, ['issues', String(n)])}>#${n}</a>`)}
+            <br />Merging this pull request will close those issues.
+          </p>` : nothing}
           ${d.body ? html`<div class="md-body">${(() => { const r = renderMarkdown(d.body, { org, repo, ref: head || st.ref, dir: '' }); return r.template; })()}</div>` : html`<p class="muted">No description.</p>`}
         `}
       </div>
@@ -2131,7 +2292,9 @@ const RepoView = (org, repo, opts) => {
         if (f.busy) return;
         f.err = ''; f.busy = true; draw();
         try {
+          const fixes = parseNumberList(f.fixesText || '');
           const payload = { title: String(f.title || '').trim(), body: String(f.body || ''), base: String(f.base || 'main'), head: String(f.head || ''), draft: !!f.draft };
+          if (fixes.length) payload.fixes = fixes;
           if (!payload.title) throw new Error('title is required');
           if (!payload.head) throw new Error('select a head branch');
           const data = await api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/pulls`, { method: 'POST', auth: true, body: payload });
@@ -2157,6 +2320,8 @@ const RepoView = (org, repo, opts) => {
           <input id="pr-title" type="text" .value=${f.title} @input=${(e) => { f.title = e.target.value; }} required />
           <label for="pr-body">Description</label>
           <textarea id="pr-body" rows="6" .value=${f.body} @input=${(e) => { f.body = e.target.value; }}></textarea>
+          <label for="pr-fixes"><strong>Fixes</strong> <span class="tiny-note">issue numbers, comma- or space-separated (e.g. 12, 15)</span></label>
+          <input id="pr-fixes" type="text" placeholder="12, 15" .value=${f.fixesText || ''} @input=${(e) => { f.fixesText = e.target.value; }} />
           <label class="choice"><input type="checkbox" .checked=${!!f.draft} @change=${(e) => { f.draft = e.target.checked; draw(); }} /> Create as draft</label>
           <div class="form-actions">
             <button class="btn btn-primary" type="submit" ?disabled=${f.busy}>${f.busy ? 'Creating…' : 'Create pull request'}</button>
@@ -2538,13 +2703,45 @@ const RepoView = (org, repo, opts) => {
         <p><a href=${repoUrl(org, repo, ['issues'])}>← Issues</a></p>
         <div class="card pr-title-box">
           <div class="pr-title-row">
-            <h2>#${d.number ?? st.issueNo} ${d.title || ''}</h2>
+            ${st.issueEditing ? html`
+              <form class="form" @submit=${async (e) => {
+                e.preventDefault();
+                if (st.issueEditBusy) return;
+                st.issueErr = ''; st.issueEditBusy = true; draw();
+                try {
+                  const body = {
+                    title: String(st.issueEditTitle || '').trim(),
+                    body: String(st.issueEditBody || ''),
+                  };
+                  const tag = String(st.issueEditTag || '').trim();
+                  if (tag) body.tag = tag; else body.tag = '';
+                  const data = await api(\`/v1/repos/\${encodeURIComponent(org)}/\${encodeURIComponent(repo)}/issues/\${encodeURIComponent(st.issueNo)}\`, { method: 'PATCH', auth: true, body });
+                  st.issue = { live: true, data };
+                  st.issueEditing = false; st.issueEditBusy = false; draw();
+                } catch (e3) { st.issueErr = e3.message || String(e3); st.issueEditBusy = false; draw(); }
+              }}>
+                <label for="is-edit-title">Title</label>
+                <input id="is-edit-title" type="text" .value=${st.issueEditTitle} @input=${(e) => { st.issueEditTitle = e.target.value; }} required />
+                <label for="is-edit-body">Description</label>
+                <textarea id="is-edit-body" rows="6" .value=${st.issueEditBody} @input=${(e) => { st.issueEditBody = e.target.value; }}></textarea>
+                <label for="is-edit-tag">Tag</label>
+                <input id="is-edit-tag" type="text" placeholder="ui, infra, urgent" .value=${st.issueEditTag || ''} @input=${(e) => { st.issueEditTag = e.target.value; }} />
+                <div class="form-actions">
+                  <button class="btn btn-primary" type="submit" ?disabled=${st.issueEditBusy}>${st.issueEditBusy ? 'Saving…' : 'Save'}</button>
+                  <button class="btn" type="button" @click=${() => { st.issueEditing = false; draw(); }}>Cancel</button>
+                </div>
+              </form>
+            ` : html`
+              <h2>#${d.number ?? st.issueNo} ${d.title || ''}</h2>
+              ${canToggle ? html`<button class="btn" type="button" @click=${() => { st.issueEditing = true; st.issueEditTitle = d.title || ''; st.issueEditBody = d.body || ''; st.issueEditTag = d.tag || ''; draw(); }}>Edit</button>` : nothing}
+            `}
           </div>
           <div class="pr-meta-row">
             <span class="badge pr-state">${state}</span>
             <span>${d.author || d.user || d.author_name || 'unknown'}</span>
             <span class="tiny-note">${fmtTime(d.created_at)}</span>
           </div>
+          ${d.tag ? html`<p class="tiny-note">Tag: <strong>${d.tag}</strong></p>` : nothing}
           ${d.body ? html`<div class="md-body">${(() => { const r = renderMarkdown(d.body, { org, repo, ref: st.ref, dir: '' }); return r.template; })()}</div>` : html`<p class="muted">No description.</p>`}
           <div class="pr-actions">
             ${canToggle ? html`<button class="btn" type="button" ?disabled=${st.issueBusy} @click=${toggle}>${st.issueBusy ? 'Working…' : (open ? 'Close' : 'Reopen')}</button>` : nothing}
@@ -2561,6 +2758,8 @@ const RepoView = (org, repo, opts) => {
       f.err = ''; f.busy = true; draw();
       try {
         const payload = { title: String(f.title || '').trim(), body: String(f.body || '') };
+        const tag = String(f.tag || '').trim();
+        if (tag) payload.tag = tag;
         if (!payload.title) throw new Error('title is required');
         const data = await api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/issues`, { method: 'POST', auth: true, body: payload });
         const num = data?.number || data?.id;
@@ -2568,15 +2767,30 @@ const RepoView = (org, repo, opts) => {
         navigate(repoUrl(org, repo, ['issues', String(num)]));
       } catch (e2) { f.err = e2.message || String(e2); f.busy = false; draw(); }
     };
+    const currentTag = parseLocation().query.get('tag') || '';
+    const onFilter = (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const t = String(fd.get('tag') || '').trim();
+      const base = repoUrl(org, repo, ['issues']);
+      navigate(t ? `${base}?tag=${encodeURIComponent(t)}` : base);
+    };
     return html`
       <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap;">
         <h2 style="margin:.2rem 0">Open issues</h2>
+        <form class="form" style="display:flex;align-items:center;gap:.4rem;margin:.2rem 0" @submit=${onFilter}>
+          <input name="tag" type="text" placeholder="Filter by tag" .value=${currentTag} />
+          <button class="btn" type="submit">Apply</button>
+        </form>
       </div>
       ${!st.issues ? html`<p class="muted">Loading…</p>`
         : st.issues.live === false && (st.issues.status === 404 || st.issues.status === 405) ? html`<p class="muted">Issues are not available on this API yet.</p>`
-        : list.length ? html`<ul class="repo-list">${list.filter((i) => (i.state || 'open') === 'open').map((i) => html`<li class="repo-item">
+        : list.length ? html`<ul class="repo-list">${list
+            .filter((i) => (i.state || 'open') === 'open')
+            .map((i) => html`<li class="repo-item">
             <a href=${repoUrl(org, repo, ['issues', String(i.number)])}><strong>#${i.number}</strong> ${i.title}</a>
             <span class="badge">${i.state || 'open'}</span>
+            ${i.tag ? html`<span class="tiny-note" style="margin-left:.25rem">tag: <strong>${i.tag}</strong></span>` : nothing}
           </li>`)}</ul>` : html`<p class="muted">No open issues.</p>`}
       ${getAuth()?.token ? html`<form class="card form" style="margin-top:1rem" @submit=${submit}>
         <h3 style="margin:.2rem 0">New issue</h3>
@@ -2584,6 +2798,8 @@ const RepoView = (org, repo, opts) => {
         <input id="is-title" type="text" .value=${f.title} @input=${(e) => { f.title = e.target.value; }} required />
         <label for="is-body">Description</label>
         <textarea id="is-body" rows="6" .value=${f.body} @input=${(e) => { f.body = e.target.value; }}></textarea>
+        <label for="is-tag">Tag <span class="tiny-note">optional</span></label>
+        <input id="is-tag" type="text" placeholder="ui, infra, urgent" .value=${f.tag || ''} @input=${(e) => { f.tag = e.target.value; }} />
         <div class="form-actions">
           <button class="btn btn-primary" type="submit" ?disabled=${f.busy}>${f.busy ? 'Creating…' : 'Create issue'}</button>
         </div>
@@ -2656,7 +2872,9 @@ const RepoView = (org, repo, opts) => {
         if (st.issueNo) {
           tryGet(`${b}/issues/${encodeURIComponent(st.issueNo)}`, null, { auth: authed }).then((s) => { st.issue = s; rerender(); });
         } else {
-          tryGet(`${b}/issues`, { issues: [] }, { auth: authed }).then((s) => { st.issues = s; rerender(); });
+          const t = parseLocation().query.get('tag') || '';
+          const path = t ? `${b}/issues?tag=${encodeURIComponent(t)}` : `${b}/issues`;
+          tryGet(path, { issues: [] }, { auth: authed }).then((s) => { st.issues = s; rerender(); });
         }
         return;
       }
@@ -2891,6 +3109,12 @@ function routeFromParts(parts) {
   if (parts.length === 1 && parts[0] === 'getting-started') return { view: GettingStarted, title: 'Getting started — ScionBase' };
   if ((parts.length === 1 && parts[0] === 'ci') || (parts[0] === 'docs' && parts[1] === 'ci')) return { view: CiDocs, title: 'CI on ScionBase' };
   if (parts.length === 1 && parts[0] === 'cli') return { view: CliView, title: 'Download the CLI — ScionBase' };
+  if (parts.length >= 1 && parts[0] === 'boards') {
+    const id = parts[1] || null;
+    return id
+      ? Object.assign(BoardView(id), { title: `Board ${id} — ScionBase` })
+      : Object.assign(BoardsView(), { title: 'Boards — ScionBase' });
+  }
   if (parts.length === 1 && parts[0] === 'orgs') return Object.assign(OrgsView(), { title: 'Organizations — ScionBase' });
   if (parts.length === 1 && parts[0] === 'login') return LoginView();
   if (parts.length === 1 && parts[0] === 'new') return NewRepoView();
