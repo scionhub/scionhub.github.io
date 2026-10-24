@@ -16,7 +16,7 @@ const AUTH_KEY = 'scionbase.auth';
 const OLD_AUTH_KEY = ['scion','hub.auth'].join('');
 try { const o = localStorage.getItem(OLD_AUTH_KEY); if (o && !localStorage.getItem(AUTH_KEY)) localStorage.setItem(AUTH_KEY, o); localStorage.removeItem(OLD_AUTH_KEY); } catch {}
 const ENV = `export SCN_SERVER=${API}`;
-const RELEASE_TAG = 'scn-v0.1.0';
+const RELEASE_TAG = 'scn-v0.3.0';
 const RELEASE_PAGE = `https://github.com/scionhub/openscion/releases/tag/${RELEASE_TAG}`;
 const RELEASE_ASSET = 'scn-x86_64-unknown-linux-gnu.tar.gz';
 const RELEASE_ASSET_URL = `https://github.com/scionhub/openscion/releases/download/${RELEASE_TAG}/${RELEASE_ASSET}`;
