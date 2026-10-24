@@ -20,6 +20,12 @@ const RELEASE_TAG = 'scn-v0.3.0';
 const RELEASE_PAGE = `https://github.com/scionhub/openscion/releases/tag/${RELEASE_TAG}`;
 const RELEASE_ASSET = 'scn-x86_64-unknown-linux-gnu.tar.gz';
 const RELEASE_ASSET_URL = `https://github.com/scionhub/openscion/releases/download/${RELEASE_TAG}/${RELEASE_ASSET}`;
+const assetUrl = (target) => `https://github.com/scionhub/openscion/releases/download/${RELEASE_TAG}/scn-${target}.tar.gz`;
+const DOWNLOADS = [
+  { label: 'macOS · Apple Silicon', note: 'M1 and newer (arm64)', target: 'aarch64-apple-darwin', mac: true },
+  { label: 'macOS · Intel', note: 'x86_64', target: 'x86_64-apple-darwin', mac: true },
+  { label: 'Linux x86_64', note: 'glibc', target: 'x86_64-unknown-linux-gnu' },
+];
 const README_NAMES = ['README.md', 'README', 'readme.md', 'Readme.md'];
 const MAX_BLOB_BYTES = 512 * 1024;
 const MAX_BLOB_LINES = 4000;
@@ -953,21 +959,34 @@ the line as it is on main
 }
 
 function downloadSection() {
+  const isMac = /Mac/i.test(navigator.platform || navigator.userAgent || '');
   return html`
     <div class="download-grid">
-      <article class="download-card recommended">
-        <h3>Linux x86_64 <span class="badge recommend-badge">release</span></h3>
-        <p class="muted">GitHub Release <a href=${RELEASE_PAGE} data-external target="_blank" rel="noopener">${RELEASE_TAG}</a> · <code>${RELEASE_ASSET}</code></p>
-        <a class="btn btn-primary" href=${RELEASE_ASSET_URL} data-external>Download ${RELEASE_ASSET}</a>
-      </article>
+      ${DOWNLOADS.map((d) => html`<article class="download-card ${(isMac ? d.mac : !d.mac) && (d.target !== 'x86_64-apple-darwin') ? 'recommended' : ''}">
+        <h3>${d.label}</h3>
+        <p class="muted">${d.note} · <code>scn-${d.target}.tar.gz</code> (<a href=${assetUrl(d.target) + '.sha256'} data-external>sha256</a>)</p>
+        <a class="btn btn-primary" href=${assetUrl(d.target)} data-external>Download</a>
+      </article>`)}
       <article class="download-card">
         <h3>From source (cargo)</h3>
         <p class="muted">Builds the <code>scn</code> CLI from the same tagged release.</p>
         ${pre([`cargo install --git https://github.com/scionhub/openscion --tag ${RELEASE_TAG} --bin scn`])}
       </article>
     </div>
+    <p class="muted">All builds are on GitHub Release <a href=${RELEASE_PAGE} data-external target="_blank" rel="noopener">${RELEASE_TAG}</a>.</p>
     <div class="download-steps docs-content">
-      <h3>Install the binary</h3>
+      <h3>Install on macOS</h3>
+      ${pre([
+        '# Apple Silicon; use x86_64-apple-darwin on Intel Macs',
+        `curl -L -o scn.tar.gz ${assetUrl('aarch64-apple-darwin')}`,
+        'tar xzf scn.tar.gz',
+        'xattr -d com.apple.quarantine scn 2>/dev/null || true',
+        'mkdir -p ~/.local/bin && mv scn ~/.local/bin/',
+        'export PATH="$HOME/.local/bin:$PATH"',
+        'scn --version',
+      ])}
+      <p class="tiny-note">The macOS binaries are not signed or notarized. If you download them with a browser, Gatekeeper blocks them ("cannot be opened because the developer cannot be verified"). Run <code>xattr -d com.apple.quarantine scn</code> once, or allow it under System Settings → Privacy &amp; Security. Downloads made with <code>curl</code> are usually not quarantined.</p>
+      <h3>Install on Linux</h3>
       ${pre([
         `curl -L -o ${RELEASE_ASSET} ${RELEASE_ASSET_URL}`,
         `tar xzf ${RELEASE_ASSET}`,
@@ -1025,7 +1044,7 @@ const Home = () => html`
   <section id="start" class="section alt"><div class="container docs-content">
     <h2>Get started</h2>
     <h3 id="download">1. Download the CLI</h3>
-    <p>The CLI binary is <code>scn</code>. Prebuilt Linux builds are on the <a href=${RELEASE_PAGE} data-external target="_blank" rel="noopener">${RELEASE_TAG} GitHub Release</a>. <a href="/#/cli">Full install page</a>.</p>
+    <p>The CLI binary is <code>scn</code>. Prebuilt macOS (Apple Silicon, Intel) and Linux builds are on the <a href=${RELEASE_PAGE} data-external target="_blank" rel="noopener">${RELEASE_TAG} GitHub Release</a>. <a href="/#/cli">Full install page</a>.</p>
     ${downloadSection()}
     <h3 id="user">2. Create a user</h3>
     <p>On the web: <a href="/#/login">Sign in / create account</a>. Or with the CLI:</p>
