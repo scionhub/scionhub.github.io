@@ -1030,6 +1030,7 @@ const Home = () => html`
         (Proof of Data Possession), each piece is addressed by its <strong>PieceCID</strong>, and files are
         read <strong>directly from the storage provider</strong>.</p>
       <p class="disclaimer">This is a <strong>proof of concept</strong>. Keep expectations realistic; we keep claims honest.</p>
+      <p class="tiny-note">Part of <a href="/#/verified-products">Filecoin’s Verified Products</a>.</p>
       <div class="hero-cta">
         <a class="btn btn-primary btn-lg" href="/#start">Get started</a>
         <a class="btn btn-ghost btn-lg" href="/#/orgs">Browse orgs</a>
@@ -1080,6 +1081,38 @@ const Home = () => html`
     </div>
     <p class="disclaimer center">Proof of concept: <strong>no real payment is taken</strong>. For pilots or production, contact <a href="https://filoz.org" target="_blank" rel="noopener">FilOz</a>.</p>
   </div></section>`;
+
+/* ---------- verified products ---------- */
+const VerifiedProducts = () => html`
+  <div class="page"><div class="container docs-content">
+    <h1>Filecoin Verified Products</h1>
+    <p class="tiny-note">A small set of products that showcase Filecoin‑backed storage and access.</p>
+    <div class="md-body">
+      <table>
+        <thead>
+          <tr><th>Product</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><a href="https://fil.pub" target="_blank" rel="noopener">fil.pub</a></td>
+            <td>Secrets share</td>
+          </tr>
+          <tr>
+            <td><a href="https://curiostorage.github.io/filstream" target="_blank" rel="noopener">FilStream</a></td>
+            <td>Video sharing</td>
+          </tr>
+          <tr>
+            <td><a href="https://pin.filecoin.cloud/" target="_blank" rel="noopener">pin.filecoin.cloud</a></td>
+            <td>Store your files with IPFS reachability</td>
+          </tr>
+          <tr>
+            <td><a href="https://scionbase.ai" target="_blank" rel="noopener">ScionBase</a></td>
+            <td>PoC source hosting on Filecoin</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div></div>`;
 
 const CI_YML_EXAMPLE = `# .scionbase/ci.yml
 jobs:
@@ -3125,11 +3158,16 @@ function routeFromParts(parts) {
   if (parts.length === 1 && parts[0] === 'getting-started') return { view: GettingStarted, title: 'Getting started — ScionBase' };
   if ((parts.length === 1 && parts[0] === 'ci') || (parts[0] === 'docs' && parts[1] === 'ci')) return { view: CiDocs, title: 'CI on ScionBase' };
   if (parts.length === 1 && parts[0] === 'cli') return { view: CliView, title: 'Download the CLI — ScionBase' };
+  // Boards routes (from main)
   if (parts.length >= 1 && parts[0] === 'boards') {
     const id = parts[1] || null;
     return id
       ? Object.assign(BoardView(id), { title: `Board ${id} — ScionBase` })
       : Object.assign(BoardsView(), { title: 'Boards — ScionBase' });
+  }
+  // Verified products page
+  if (parts.length === 1 && (parts[0] === 'verified-products' || parts[0] === 'filecoin-verified-products')) {
+    return { view: VerifiedProducts, title: 'Filecoin Verified Products — ScionBase' };
   }
   if (parts.length === 1 && parts[0] === 'orgs') return Object.assign(OrgsView(), { title: 'Organizations — ScionBase' });
   if (parts.length === 1 && parts[0] === 'login') return LoginView();
