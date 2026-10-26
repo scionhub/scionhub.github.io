@@ -10,4 +10,4 @@ Filecoin via PDP (Proof of Data Possession), addressed by PieceCID and read dire
 
 Run locally: `python3 -m http.server 8080` and open `http://localhost:8080/#/`.
 
-Pricing (POC): free for the first 6 months or 1 GB, then $5/GB/month (USD or ETH). Contact: https://filoz.org
+Pricing (POC): Free for the first 60 days or first 500 MB (whichever comes first); then $5/GB/year (minimum 1 GB; USD or ETH). Contact: https://filoz.org
