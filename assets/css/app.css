@@ -174,7 +174,7 @@
   background:#da3633; color:#fff; border-color:#f85149;
 }
 .btn-danger:hover { filter:brightness(1.05); }
-.btn:disabled, .btn-danger:disabled { opacity:.45; cursor:not-allowed; filter:none; }
+.btn:disabled, .btn-danger:disabled, .btn.disabled, .btn-danger.disabled { opacity:.45; cursor:not-allowed; filter:none; pointer-events:auto; }
 .btn-tiny { padding:.15rem .45rem; font-size:.8rem; }
 .cli-panel { margin: 1.25rem 0 0; }
 .auth-grid { display:grid; grid-template-columns:1fr 1fr; gap:1rem; }

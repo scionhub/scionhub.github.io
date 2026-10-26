@@ -9,7 +9,7 @@ import purifyNs from 'https://cdn.jsdelivr.net/npm/dompurify@3/+esm';
 
 const DOMPurify = purifyNs?.default || purifyNs;
 
-const API = (window.SCIONBASE_API_BASE || 'https://openscion-filecoin-poc.jolly-bush-400d.workers.dev').replace(/\/$/, '');
+const API = (window.SCIONBASE_API_BASE || 'https://api.scionbase.ai').replace(/\/$/, '');
 const FALLBACK = { orgs: ['filecoin-project'], repos: { 'filecoin-project': ['curio', 'lotus'] } };
 const DATASET = '46121';
 const AUTH_KEY = 'scionbase.auth';
@@ -1073,9 +1073,9 @@ const Home = () => html`
   <section id="pricing" class="section"><div class="container">
     <h2>Pricing</h2>
     <div class="pricing">
-      <div class="price-card"><h3>Starter</h3><p class="price">$0</p><ul><li>First <strong>6 months</strong> or first <strong>1 GB</strong> — whichever comes first</li><li>Includes org + repos</li><li>Community support</li></ul></div>
-      <div class="price-card highlight"><h3>Standard</h3><p class="price"><span class="price-number">$5</span><span class="price-unit">/ GB / month</span></p>
-        <ul><li>Usage‑based, billed monthly</li><li>Payable in <strong>USD</strong> or <strong>ETH</strong></li><li>Cancel anytime</li></ul>
+      <div class="price-card"><h3>Starter</h3><p class="price">$0</p><ul><li>First <strong>60 days</strong> or first <strong>500 MB</strong> — whichever comes first</li><li>Includes org + repos</li><li>Community support</li></ul></div>
+      <div class="price-card highlight"><h3>Standard</h3><p class="price"><span class="price-number">$5</span><span class="price-unit">/ GB / year</span></p>
+        <ul><li>Usage‑based, billed yearly</li><li>Minimum <strong>1 GB</strong></li><li>Payable in <strong>USD</strong> or <strong>ETH</strong></li></ul>
         <a class="btn btn-primary btn-lg" href="/checkout.html" data-external>Get started</a></div>
     </div>
     <p class="disclaimer center">Proof of concept: <strong>no real payment is taken</strong>. For pilots or production, contact <a href="https://filoz.org" target="_blank" rel="noopener">FilOz</a>.</p>
@@ -2010,6 +2010,7 @@ const RepoView = (org, repo, opts) => {
       if (st.mergeability.data.ownerApprovals === 0) mergeReasons.push('Needs approval from a repo owner');
       if (n > 0) mergeReasons.push(n === 1 ? '1 unresolved comment' : `${n} unresolved comments`);
     }
+    const explainDisabled = (msg) => { alert(msg); };
     return html`
       <div class="card pr-title-box">
         ${st.editing ? html`
@@ -2054,16 +2055,16 @@ const RepoView = (org, repo, opts) => {
         </form>` : signInHint()}
       </section>
       ${checksSection(false)}
-      <section class="pr-approvals" aria-label="Reviews and approvals">
-        <h3>Reviews and approvals</h3>
-        <p class="merge-note">Only approvals from repository owners other than the author count toward merge. Required: ${needApprovals}.</p>
+      <section class="pr-approvals" aria-label="Approvals">
+        <h3>Approvals (${ownerApprovals.length} of ${needApprovals} required)</h3>
         ${!st.reviews ? nothing
           : (st.reviews.live === false && st.reviews.status === 404) ? html`<p class="muted">Reviews are not available on this API yet.</p>`
-          : reviews.length ? html`<ul class="pr-approval-list">${reviews.map((r) => html`<li>
+          : (reviews.length ? html`<ul class="pr-approval-list">${reviews.map((r) => html`<li>
               <strong>${r.user || r.author || 'unknown'}</strong>
               <span class="owner-badge">changes requested</span>
               <span class="tiny-note">${fmtTime(r.created_at)}</span>
-            </li>`)}</ul>` : nothing}
+            </li>`)}</ul>` : nothing)
+        }
         ${!st.approvals ? html`<p class="muted">Loading approvals…</p>`
           : approvals.length ? html`<ul class="pr-approval-list">${approvals.map((a) => html`<li>
               <strong>${a.user || a.author || 'unknown'}</strong>
@@ -2071,7 +2072,7 @@ const RepoView = (org, repo, opts) => {
               ${approvalCounts(a) ? nothing : html`<span class="tiny-note">(does not count${approvalIsOwner(a, owners) ? ': author' : ': not an owner'})</span>`}
               <span class="tiny-note">${fmtTime(a.created_at)}</span>
             </li>`)}</ul>`
-          : html`<p class="muted">${st.approvals.live === false && st.approvals.status === 404 ? 'Approvals are not available on this API yet.' : 'No approvals yet.'}</p>`}
+          : (st.approvals.live === false && st.approvals.status === 404 ? html`<p class="muted">Approvals are not available on this API yet.</p>` : nothing)}
         <p class="tiny-note">${ownerApprovals.length} of ${needApprovals} required owner approval${needApprovals === 1 ? '' : 's'}</p>
         ${canApprove ? html`<div class="form-actions">
           <button class="btn ${approved ? '' : 'btn-primary'}" type="button" ?disabled=${st.approveBusy} @click=${toggleApproval}>${st.approveBusy ? 'Working…' : (approved ? 'Remove approval' : 'Approve')}</button>
@@ -2088,7 +2089,20 @@ const RepoView = (org, repo, opts) => {
           </label>
           <button class="btn btn-primary" type="button" ?disabled=${!!st.prBusy || mergeBlocked} @click=${() => prAction('merge')}>${st.prBusy === 'merge' ? 'Merging…' : (st.mergeMethod === 'squash' ? 'Merge (Squash)' : 'Merge')}</button>` : nothing}
         ${canClose ? html`<button class="btn" type="button" ?disabled=${!!st.prBusy} @click=${() => prAction('close')}>${st.prBusy === 'close' ? 'Closing…' : 'Close'}</button>` : nothing}
-        ${!canMerge && !canClose ? html`<p class="tiny-note">Sign in as an org member to merge, or as the author to close.</p>` : nothing}
+        ${!canMerge && !canClose ? html`
+          <span class="btn disabled" role="button" aria-disabled="true" tabindex="0"
+            title="Sign in as an org member to review this pull request"
+            @click=${() => explainDisabled('Sign in as an org member to review this pull request')}
+            @keydown=${(e) => { if (e.key === 'Enter' || e.key === ' ') explainDisabled('Sign in as an org member to review this pull request'); }}>
+            Review
+          </span>
+          <span class="btn disabled" role="button" aria-disabled="true" tabindex="0"
+            title="Sign in as the author or an admin to close this pull request"
+            @click=${() => explainDisabled('Sign in as the author or an admin to close this pull request')}
+            @keydown=${(e) => { if (e.key === 'Enter' || e.key === ' ') explainDisabled('Sign in as the author or an admin to close this pull request'); }}>
+            Close
+          </span>
+        ` : nothing}
         ${isAuthor ? html`${isDraft
             ? html`<button class="btn" type="button" ?disabled=${!!st.prBusy} @click=${() => toggleDraft(false)}>${st.prBusy === 'draft' ? 'Working…' : 'Ready for review'}</button>`
             : html`<button class="btn" type="button" ?disabled=${!!st.prBusy} @click=${() => toggleDraft(true)}>${st.prBusy === 'draft' ? 'Working…' : 'Convert to draft'}</button>`}` : nothing}
@@ -2337,7 +2351,6 @@ const RepoView = (org, repo, opts) => {
       const d = p.data || {};
       return html`
         <div class="pr-detail">
-          <p><a href=${repoUrl(org, repo, ['pulls'])}>← Pull requests</a></p>
           <nav class="pr-subtabs" aria-label="Pull request">
             <a href=${pullUrl(org, repo, st.pullNo)} aria-current=${st.prTab !== 'files' ? 'page' : nothing}>Conversation</a>
             <a href=${pullUrl(org, repo, st.pullNo, 'files')} aria-current=${st.prTab === 'files' ? 'page' : nothing}>Code</a>
@@ -2668,17 +2681,20 @@ const RepoView = (org, repo, opts) => {
     ${pre(['scn push -m "merge main"', `scn pr create --title "My change"`, `scn pr merge 1`])}
     <p class="tiny-note"><a href="/#/getting-started">Full getting-started guide</a> · <a href="/#/ci">CI on ScionBase</a></p>`;
 
-  const view = () => html`
-    <div class="page"><div class="container">
-      <nav class="repo-tabs" aria-label="Repository">
+  const view = () => {
+    const { parts } = parseLocation();
+    const showRepoTabs = parts.length === 2; // only when breadcrumbs end at the repo
+    return html`<div class="page"><div class="container">
+      ${showRepoTabs ? html`<nav class="repo-tabs" aria-label="Repository">
         <a href=${repoUrl(org, repo)} aria-current=${st.tab === 'code' ? 'page' : nothing}>Code</a>
         <a href=${repoUrl(org, repo, ['issues'])} aria-current=${st.tab === 'issues' ? 'page' : nothing}>Issues</a>
         <a href=${repoUrl(org, repo, ['pulls'])} aria-current=${st.tab === 'pulls' ? 'page' : nothing}>Pull requests</a>
         <a href=${repoUrl(org, repo, ['sync'])} aria-current=${st.tab === 'sync' ? 'page' : nothing}>Sync</a>
         ${isViewerOwner() ? html`<a href=${repoUrl(org, repo, ['settings'])} aria-current=${st.tab === 'settings' ? 'page' : nothing}>Settings</a>` : nothing}
-      </nav>
+      </nav>` : nothing}
       ${st.tab === 'pulls' ? pullsTab() : st.tab === 'issues' ? issuesTab() : st.tab === 'sync' ? syncTab() : st.tab === 'settings' ? settingsTab() : codeTab()}
     </div></div>`;
+  }
 
   const issuesTab = () => {
     if (st.issueNo) {
