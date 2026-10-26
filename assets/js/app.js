@@ -1060,9 +1060,8 @@ const Home = () => html`
   <section id="pricing" class="section"><div class="container">
     <h2>Pricing</h2>
     <div class="pricing">
-      <div class="price-card"><h3>Starter</h3><p class="price">$0</p><ul><li>First <strong>6 months</strong> or first <strong>1 GB</strong> — whichever comes first</li><li>Includes org + repos</li><li>Community support</li></ul></div>
-      <div class="price-card highlight"><h3>Standard</h3><p class="price"><span class="price-number">$5</span><span class="price-unit">/ GB / month</span></p>
-        <ul><li>Usage‑based, billed monthly</li><li>Payable in <strong>USD</strong> or <strong>ETH</strong></li><li>Cancel anytime</li></ul>
+      <div class="price-card highlight"><h3>Standard</h3><p class="price"><span class="price-number">$1</span><span class="price-unit">/ GB / year</span></p>
+        <ul><li>Usage‑based, billed yearly</li><li>Minimum <strong>1 GB</strong> (1 GB included)</li><li>Payable in <strong>USD</strong> or <strong>ETH</strong></li></ul>
         <a class="btn btn-primary btn-lg" href="/checkout.html" data-external>Get started</a></div>
     </div>
     <p class="disclaimer center">Proof of concept: <strong>no real payment is taken</strong>. For pilots or production, contact <a href="https://filoz.org" target="_blank" rel="noopener">FilOz</a>.</p>
