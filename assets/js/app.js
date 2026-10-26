@@ -1060,7 +1060,7 @@ const Home = () => html`
   <section id="pricing" class="section"><div class="container">
     <h2>Pricing</h2>
     <div class="pricing">
-      <div class="price-card highlight"><h3>Standard</h3><p class="price"><span class="price-number">$1</span><span class="price-unit">/ GB / year</span></p>
+      <div class="price-card highlight"><h3>Standard</h3><p class="price"><span class="price-number">$5</span><span class="price-unit">/ GB / year</span></p>
         <ul><li>Usage‑based, billed yearly</li><li>Minimum <strong>1 GB</strong> (1 GB included)</li><li>Payable in <strong>USD</strong> or <strong>ETH</strong></li></ul>
         <a class="btn btn-primary btn-lg" href="/checkout.html" data-external>Get started</a></div>
     </div>
