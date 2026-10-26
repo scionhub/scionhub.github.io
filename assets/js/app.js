@@ -9,7 +9,7 @@ import purifyNs from 'https://cdn.jsdelivr.net/npm/dompurify@3/+esm';
 
 const DOMPurify = purifyNs?.default || purifyNs;
 
-const API = (window.SCIONBASE_API_BASE || 'https://openscion-filecoin-poc.jolly-bush-400d.workers.dev').replace(/\/$/, '');
+const API = (window.SCIONBASE_API_BASE || 'https://api.scionbase.ai').replace(/\/$/, '');
 const FALLBACK = { orgs: ['filecoin-project'], repos: { 'filecoin-project': ['curio', 'lotus'] } };
 const DATASET = '46121';
 const AUTH_KEY = 'scionbase.auth';
