@@ -1784,6 +1784,7 @@ const RepoView = (org, repo, opts) => {
       if (st.mergeability.data.ownerApprovals === 0) mergeReasons.push('Needs approval from a repo owner');
       if (n > 0) mergeReasons.push(n === 1 ? '1 unresolved comment' : `${n} unresolved comments`);
     }
+    const explainDisabled = (msg) => { alert(msg); };
     return html`
       <div class="card pr-title-box">
         ${st.editing ? html`
@@ -1823,8 +1824,7 @@ const RepoView = (org, repo, opts) => {
       </section>
       ${checksSection(false)}
       <section class="pr-approvals" aria-label="Approvals">
-        <h3>Approvals</h3>
-        <p class="merge-note">Only approvals from repository owners other than the author count toward merge. Required: ${needApprovals}.</p>
+        <h3>Approvals (${ownerApprovals.length} of ${needApprovals} required)</h3>
         ${!st.approvals ? html`<p class="muted">Loading approvals…</p>`
           : approvals.length ? html`<ul class="pr-approval-list">${approvals.map((a) => html`<li>
               <strong>${a.user || a.author || 'unknown'}</strong>
@@ -1832,14 +1832,26 @@ const RepoView = (org, repo, opts) => {
               ${approvalCounts(a) ? nothing : html`<span class="tiny-note">(does not count${approvalIsOwner(a, owners) ? ': author' : ': not an owner'})</span>`}
               <span class="tiny-note">${fmtTime(a.created_at)}</span>
             </li>`)}</ul>`
-          : html`<p class="muted">${st.approvals.live === false && st.approvals.status === 404 ? 'Approvals are not available on this API yet.' : 'No approvals yet.'}</p>`}
-        <p class="tiny-note">${ownerApprovals.length} of ${needApprovals} required owner approval${needApprovals === 1 ? '' : 's'}</p>
+          : (st.approvals.live === false && st.approvals.status === 404 ? html`<p class="muted">Approvals are not available on this API yet.</p>` : nothing)}
         ${canApprove ? html`<button class="btn ${approved ? '' : 'btn-primary'}" type="button" ?disabled=${st.approveBusy} @click=${toggleApproval}>${st.approveBusy ? 'Working…' : (approved ? 'Remove approval' : 'Approve')}</button>` : nothing}
       </section>
       ${open ? html`<div class="pr-actions">
         ${canMerge ? html`<button class="btn btn-primary" type="button" ?disabled=${!!st.prBusy || mergeBlocked} @click=${() => prAction('merge')}>${st.prBusy === 'merge' ? 'Merging…' : 'Merge'}</button>` : nothing}
         ${canClose ? html`<button class="btn" type="button" ?disabled=${!!st.prBusy} @click=${() => prAction('close')}>${st.prBusy === 'close' ? 'Closing…' : 'Close'}</button>` : nothing}
-        ${!canMerge && !canClose ? html`<p class="tiny-note">Sign in as an org member to merge, or as the author to close.</p>` : nothing}
+        ${!canMerge && !canClose ? html`
+          <span class="btn disabled" role="button" aria-disabled="true" tabindex="0"
+            title="Sign in as an org member to review this pull request"
+            @click=${() => explainDisabled('Sign in as an org member to review this pull request')}
+            @keydown=${(e) => { if (e.key === 'Enter' || e.key === ' ') explainDisabled('Sign in as an org member to review this pull request'); }}>
+            Review
+          </span>
+          <span class="btn disabled" role="button" aria-disabled="true" tabindex="0"
+            title="Sign in as the author or an admin to close this pull request"
+            @click=${() => explainDisabled('Sign in as the author or an admin to close this pull request')}
+            @keydown=${(e) => { if (e.key === 'Enter' || e.key === ' ') explainDisabled('Sign in as the author or an admin to close this pull request'); }}>
+            Close
+          </span>
+        ` : nothing}
       </div>
       ${mergeBlocked && mergeReasons.length ? html`<ul class="merge-reasons">${mergeReasons.map((r) => html`<li>${r}</li>`)}</ul>` : nothing}
       ${st.mergeability?.live === false && st.mergeability.status === 404 ? html`<p class="tiny-note">Mergeability checks are not available on this API yet.</p>` : nothing}` : nothing}
@@ -2039,7 +2051,6 @@ const RepoView = (org, repo, opts) => {
       const d = p.data || {};
       return html`
         <div class="pr-detail">
-          <p><a href=${repoUrl(org, repo, ['pulls'])}>← Pull requests</a></p>
           <nav class="pr-subtabs" aria-label="Pull request">
             <a href=${pullUrl(org, repo, st.pullNo)} aria-current=${st.prTab !== 'files' ? 'page' : nothing}>Conversation</a>
             <a href=${pullUrl(org, repo, st.pullNo, 'files')} aria-current=${st.prTab === 'files' ? 'page' : nothing}>Code</a>
@@ -2277,16 +2288,19 @@ const RepoView = (org, repo, opts) => {
     ${pre(['scn push -m "merge main"', `scn pr create --title "My change"`, `scn pr merge 1`])}
     <p class="tiny-note"><a href="/#/getting-started">Full getting-started guide</a> · <a href="/#/ci">CI on ScionBase</a></p>`;
 
-  const view = () => html`
-    <div class="page"><div class="container">
-      <nav class="repo-tabs" aria-label="Repository">
+  const view = () => {
+    const { parts } = parseLocation();
+    const showRepoTabs = parts.length === 2; // only when breadcrumbs end at the repo
+    return html`<div class="page"><div class="container">
+      ${showRepoTabs ? html`<nav class="repo-tabs" aria-label="Repository">
         <a href=${repoUrl(org, repo)} aria-current=${st.tab === 'code' ? 'page' : nothing}>Code</a>
         <a href=${repoUrl(org, repo, ['pulls'])} aria-current=${st.tab === 'pulls' ? 'page' : nothing}>Pull requests</a>
         <a href=${repoUrl(org, repo, ['sync'])} aria-current=${st.tab === 'sync' ? 'page' : nothing}>Sync</a>
         ${isViewerOwner() ? html`<a href=${repoUrl(org, repo, ['settings'])} aria-current=${st.tab === 'settings' ? 'page' : nothing}>Settings</a>` : nothing}
-      </nav>
+      </nav>` : nothing}
       ${st.tab === 'pulls' ? pullsTab() : st.tab === 'sync' ? syncTab() : st.tab === 'settings' ? settingsTab() : codeTab()}
     </div></div>`;
+  }
 
   return {
     view,
