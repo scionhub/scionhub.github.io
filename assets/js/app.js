@@ -1253,7 +1253,7 @@ const Home = () => html`
     <p>Your username is your org. Create more orgs on the <a href="/#/orgs">organizations</a> page or with the CLI.</p>
     ${pre(['scn org create <name>', 'scn org list', 'scn repo create <name>', 'scn repo create <name> --org <org>'])}
     <h3 id="import">4. Clone, branch, push</h3>
-    ${pre(['scn clone <org>/<repo>', 'cd <repo>', 'scn branch new my-feature --from main', 'scn branch switch my-feature', '# edit files, then:', 'scn push -m "describe the change"', 'scn pr create --title "My change"'])}
+    ${pre(['scn clone <org>/<repo>', '# folder-only: scn clone <org>/<repo> --path <dir-or-file>', 'cd <repo>', 'scn branch new my-feature --from main', 'scn branch switch my-feature', '# edit files, then:', 'scn push -m "describe the change"', 'scn pr create --title "My change"'])}
     <p><a class="btn btn-primary" href="/#/getting-started">Full CLI guide: clone, branch, pull, merge, PR →</a></p>
   </div></section>
 
@@ -1352,9 +1352,9 @@ const CiDocs = () => html`
 const GettingStarted = () => html`
   <div class="page"><div class="container docs-content">
     <h1>CLI guide</h1>
-    <p class="tiny-note">The ScionBase CLI is <code>scn</code>. Set <code>SCN_SERVER</code> (or pass <code>--server</code>). <a href="/#/cli">Download</a>.</p>
-    <h2 id="setup">1. Point the CLI at ScionBase</h2>
-    ${pre([ENV, 'scn version'])}
+    <p class="tiny-note">The ScionBase CLI is <code>scn</code>. <a href="/#/cli">Download</a>.</p>
+    <h2 id="setup">1. Check the CLI</h2>
+    ${pre(['scn version'])}
     <h2 id="account">2. Create an account and log in</h2>
     <p>Needed for writes. Username must match <code>^[a-z0-9][a-z0-9-]{2,31}$</code>; password at least 10 characters. Or use the <a href="/#/login">web sign in</a>.</p>
     ${pre(['scn signup --username <you>', 'scn signup --username <you> --email <you@example.com>', 'scn login --user <you>'])}
@@ -1364,11 +1364,14 @@ const GettingStarted = () => html`
     <h2 id="clone">4. Clone</h2>
     <p>Public clones need no account. Git-like: <code>scn clone org/repo [dir] [--branch b]</code>.</p>
     ${pre(['scn clone filecoin-project/curio', 'scn clone filecoin-project/curio ./curio --branch main'])}
+    <p><strong>Folder-only checkout</strong>: use <code>--path</code> to materialize just a directory or file (sparse clone). Example:</p>
+    ${pre(['scn clone filecoin-project/lotus --path src'])}
+    <p class="tiny-note"><strong>Exclude a folder</strong>: full-tree clone has no per-folder exclude yet — use <code>--path</code> to check out only what you need.</p>
     <h2 id="branch">5. Branch</h2>
     ${pre(['scn branch', 'scn branch new my-feature --from main', 'scn branch switch my-feature', 'scn branch delete old-feature'])}
     <h2 id="pull">6. Pull, merge, push</h2>
-    <p><code>scn pull</code> fetches the current branch. <code>scn merge &lt;ref&gt;</code> three-way-merges; both-changed paths get git-style markers. Then <code>scn push</code>.</p>
-    ${pre(['scn pull', 'scn merge main', 'scn push', 'scn push -m "describe the change"'])}
+    <p><code>scn pull</code> fetches the current branch. <code>scn merge &lt;ref&gt;</code> three‑way merges; both‑changed paths get git‑style markers. To publish changes, run <code>scn commit -m "…"</code> then <code>scn push</code> — or after edits use <code>scn push -m "…"</code> to commit+publish in one step.</p>
+    ${pre(['scn pull', 'scn merge main', '# edit files', 'scn commit -m "describe the change"', 'scn push', '# or:', 'scn push -m "describe the change"'])}
     ${conflictSample()}
     <p>Edit the file to the resolved contents (remove the markers), then push.</p>
     <h2 id="pr">7. Pull requests</h2>
