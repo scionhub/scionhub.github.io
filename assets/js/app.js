@@ -3078,11 +3078,40 @@ const OrgsView = () => {
       <p class="tiny-note">Your username is your first org. CLI: <code>scn org create &lt;name&gt;</code> · <code>scn org list</code>. <a href="/#/new">New repository</a></p>
     </div></div>`,
     load: async (rerender) => {
+      // GET /v1/orgs is the formal orgs table (today: filecoin-project), not
+      // username namespaces. The Worker adds { id: actor.name, role: "admin" }
+      // on GET /v1/me, so a signed-in list must union /v1/me.orgs and always
+      // include the caller's username.
+      const names = [];
+      const seen = new Set();
+      const add = (id) => {
+        const n = String(id || '').trim();
+        if (!n || seen.has(n)) return;
+        seen.add(n);
+        names.push(n);
+      };
+      const fromList = (list) => {
+        for (const o of list || []) add(typeof o === 'string' ? o : o?.id || o?.name);
+      };
+      if (getAuth()?.token) {
+        let me = getMe();
+        if (!me) me = await refreshMe();
+        add(meName() || getAuth()?.username);
+        fromList(me?.orgs);
+      }
       try {
         const d = await api('/v1/orgs');
-        const list = Array.isArray(d) ? d : d?.orgs || [];
-        st.orgs = list.map((o) => (typeof o === 'string' ? o : o.name || o.id));
-      } catch (e) { st.err = `Could not load organizations (${e.message}).`; st.orgs = null; }
+        fromList(Array.isArray(d) ? d : d?.orgs || []);
+        st.err = '';
+      } catch (e) {
+        if (!names.length) {
+          st.err = `Could not load organizations (${e.message}).`;
+          st.orgs = null;
+          rerender();
+          return;
+        }
+      }
+      st.orgs = names;
       rerender();
     },
   };
@@ -3090,7 +3119,7 @@ const OrgsView = () => {
 
 /* ---------- top bar: breadcrumb + home-only marketing nav ---------- */
 function drawChrome() {
-  const { parts } = parseLocation();
+  let { parts } = parseLocation();
   const isHome = parts.length === 0;
   document.body.classList.toggle('is-home', isHome);
   const mk = document.getElementById('marketing-nav');
@@ -3101,6 +3130,11 @@ function drawChrome() {
   if (!el) return;
   const items = [];
   const sep = () => html`<span class="sep">/</span>`;
+  if (parts[0] === 'orgs' && parts.length > 1) {
+    items.push(html`<a href="/#/orgs">orgs</a>`);
+    items.push(sep());
+    parts = parts.slice(1);
+  }
   if (parts[0] === 'orgs' || parts[0] === 'login' || parts[0] === 'new' || parts[0] === 'getting-started' || parts[0] === 'cli' || parts[0] === 'ci') {
     const label = { orgs: 'orgs', login: 'sign in', new: 'new repository', 'getting-started': 'getting started', cli: 'download CLI', ci: 'CI' }[parts[0]];
     items.push(html`<span>${label}</span>`);
@@ -3192,7 +3226,11 @@ function routeFromParts(parts) {
   if (parts.length === 1 && (parts[0] === 'verified-products' || parts[0] === 'filecoin-verified-products')) {
     return { view: VerifiedProducts, title: 'Filecoin Verified Products — ScionBase' };
   }
-  if (parts.length === 1 && parts[0] === 'orgs') return Object.assign(OrgsView(), { title: 'Organizations — ScionBase' });
+  if (parts[0] === 'orgs') {
+    if (parts.length === 1) return Object.assign(OrgsView(), { title: 'Organizations — ScionBase' });
+    // /#/orgs/:orgName → same as /#/:orgName (do not treat "orgs" as the org).
+    return routeFromParts(parts.slice(1));
+  }
   if (parts.length === 1 && parts[0] === 'login') return LoginView();
   if (parts.length === 1 && parts[0] === 'new') return NewRepoView();
   if (parts.length === 1) {
