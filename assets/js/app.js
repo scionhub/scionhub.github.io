@@ -982,6 +982,18 @@ function findReadme(entries) {
   }
   return null;
 }
+function isMarkdownName(name) {
+  return /\.md$/i.test(String(name || ''));
+}
+function parentDir(path) {
+  return String(path || '').split('/').filter(Boolean).slice(0, -1).join('/');
+}
+function readmeCard(name, body, { loading = false } = {}) {
+  return html`<div class="readme-wrap card">
+    <div class="readme-head">${name || 'README'}</div>
+    ${loading ? html`<p class="muted" style="padding:1rem 1.25rem">Loading…</p>` : body}
+  </div>`;
+}
 
 function conflictSample() {
   return html`<pre class="conflict-sample"><code><span class="mark">&lt;&lt;&lt;&lt;&lt;&lt;&lt; local</span>
@@ -1673,7 +1685,7 @@ const RepoView = (org, repo, opts) => {
       ? `bytes=${loc.offset}-${Number(loc.offset) + Number(loc.length) - 1}`
       : '';
     const rawLink = url ? html`<a href=${url} data-external target="_blank" rel="noopener">raw</a>` : nothing;
-    if (b.spError || !b.bytes) {
+    if (!b.bytes) {
       return html`<div class="card binary-note">
         <p>Could not fetch bytes from the storage provider${b.spError ? html`: ${b.spError}` : nothing}.</p>
         ${url ? html`<p>Raw SP URL: <a href=${url} data-external target="_blank" rel="noopener">${url}</a></p>` : nothing}
@@ -1700,30 +1712,40 @@ const RepoView = (org, repo, opts) => {
       lines = lines.slice(0, MAX_BLOB_LINES);
       truncated = true;
     }
+    const name = st.path.split('/').pop() || '';
+    let mdPreview = nothing;
+    if (isMarkdownName(name) && text) {
+      const rendered = b.mdTemplate
+        || renderMarkdown(text, { org, repo, ref: st.ref, dir: parentDir(st.path) }, b.mdImages).template;
+      mdPreview = html`<div class="readme-wrap card blob-md-preview" aria-label="Rendered markdown">
+        <div class="readme-head">Preview</div>
+        ${rendered}
+      </div>`;
+    }
     return html`
-      <div class="blob-head"><span>${st.path.split('/').pop()} · ${fmtSize(size)} ${rawLink}</span>
+      <div class="blob-head"><span>${name} · ${fmtSize(size)} ${rawLink}</span>
         ${range ? html`<span class="tiny-note"><code>${range}</code></span>` : nothing}</div>
       <div class="blob-frame with-head">${codeBlock(st.path, lines.join('\n'), lines.length)}</div>
-      ${truncated ? html`<p class="tiny-note">Preview truncated.</p>` : nothing}`;
+      ${truncated ? html`<p class="tiny-note">Preview truncated.</p>` : nothing}
+      ${mdPreview}`;
   };
 
   const readmeView = () => {
     if (st.kind !== 'tree') return nothing;
     const r = st.readme;
     if (!r) return nothing;
-    if (r.loading) return html`<div class="readme-wrap card"><h2>README</h2><p class="muted">Loading…</p></div>`;
+    if (r.loading) return readmeCard(r.name || 'README', nothing, { loading: true });
     if (!r.bytes) return nothing;
     if (!isLikelyText(r.bytes, r.name)) return nothing;
-    if (r.template) {
-      return html`<div class="readme-wrap card">
-        <h2>${r.name}</h2>
-        ${r.template}
-      </div>`;
+    if (r.template) return readmeCard(r.name, r.template);
+    if (isMarkdownName(r.name)) {
+      const text = decodeUtf8(r.bytes);
+      if (text) {
+        const rendered = renderMarkdown(text, { org, repo, ref: st.ref, dir: st.path }, r.images);
+        return readmeCard(r.name, rendered.template);
+      }
     }
-    return html`<div class="readme-wrap card">
-      <h2>${r.name}</h2>
-      <pre><code>${decodeUtf8(r.bytes)}</code></pre>
-    </div>`;
+    return readmeCard(r.name, html`<pre><code>${decodeUtf8(r.bytes)}</code></pre>`);
   };
 
   const cliSnippets = {
@@ -2966,7 +2988,24 @@ const RepoView = (org, repo, opts) => {
       if (st.tab !== 'code') return;
       loadCommits(org, repo, st.ref).then((c) => { st.commits = c; rerender(); }).catch(() => {});
       if (st.kind === 'blob' && st.path) {
-        loadBlob(org, repo, st.ref, st.path).then((blob) => { st.blob = blob; rerender(); }).catch((e) => {
+        loadBlob(org, repo, st.ref, st.path).then(async (blob) => {
+          const name = st.path.split('/').pop() || '';
+          if (blob.bytes && isLikelyText(blob.bytes, name) && isMarkdownName(name)) {
+            const text = decodeUtf8(blob.bytes);
+            const dir = parentDir(st.path);
+            const rendered = renderMarkdown(text, { org, repo, ref: st.ref, dir });
+            blob.mdTemplate = rendered.template;
+            blob.mdImages = rendered.images;
+            st.blob = blob;
+            rerender();
+            if (rendered.images.length) {
+              await hydrateReadmeImages(rendered.images, org, repo, st.ref);
+              blob.mdTemplate = renderMarkdown(text, { org, repo, ref: st.ref, dir }, rendered.images).template;
+            }
+          }
+          st.blob = blob;
+          rerender();
+        }).catch((e) => {
           st.blob = { bytes: null, loc: {}, spError: e.message };
           rerender();
         });
@@ -2999,7 +3038,7 @@ const RepoView = (org, repo, opts) => {
               st.readme.template = renderMarkdown(text, { org, repo, ref: st.ref, dir: st.path }, images).template;
             }
           } catch {
-            st.readme = null;
+            if (!st.readme?.bytes) st.readme = null;
           }
           rerender();
         }
