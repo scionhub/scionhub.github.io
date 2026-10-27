@@ -150,6 +150,14 @@ async function tryGet(path, fallback, opts = {}) {
   try { return { data: await api(path, opts), live: true }; }
   catch (e) { return { data: fallback, live: false, error: String(e.message || e), status: e.status }; }
 }
+
+/** True when GET /v1/repos/:org/:repo says the repo does not exist (not merely unreachable). */
+function isRepoNotFound(result) {
+  if (!result || result.live) return false;
+  if (result.status === 404) return true;
+  const err = String(result.error || '').toLowerCase();
+  return err === 'not found' || err === 'notfound';
+}
 const srcTag = () => nothing;
 
 const pre = (lines) => html`<pre><code>${(Array.isArray(lines) ? lines : [lines]).join('\n')}</code></pre>`;
@@ -469,14 +477,26 @@ async function resolvePiece(org, repo, pieceCid) {
   return row;
 }
 
+function inlineBytesFromLoc(loc) {
+  if (!loc || typeof loc !== 'object') return null;
+  const b64 = loc.contentBase64 || loc.content_base64;
+  if (typeof b64 === 'string' && b64.length) return b64ToBytes(b64);
+  if (loc.bytes instanceof Uint8Array && loc.bytes.length) return loc.bytes;
+  if (typeof loc.content === 'string' && loc.content.length) return new TextEncoder().encode(loc.content);
+  return null;
+}
+
 async function bytesFromHint(org, repo, hint) {
   const loc = { ...hint };
+  // Blob payloads may include both contentBase64 and a pieceCid. Resolve can
+  // 400 even when inline bytes are already present — use those first.
+  const inline = inlineBytesFromLoc(loc);
+  if (inline) return { bytes: inline, loc };
   if ((!loc.url || loc.offset == null) && loc.pieceCid) {
     Object.assign(loc, await resolvePiece(org, repo, loc.pieceCid));
   }
-  if (loc.contentBase64) {
-    return { bytes: b64ToBytes(loc.contentBase64), loc };
-  }
+  const afterResolve = inlineBytesFromLoc(loc);
+  if (afterResolve) return { bytes: afterResolve, loc };
   if (loc.url) {
     try {
       const bytes = await fetchRange(loc.url, loc.offset, loc.length ?? loc.size);
@@ -961,6 +981,18 @@ function findReadme(entries) {
     if (hit) return hit;
   }
   return null;
+}
+function isMarkdownName(name) {
+  return /\.md$/i.test(String(name || ''));
+}
+function parentDir(path) {
+  return String(path || '').split('/').filter(Boolean).slice(0, -1).join('/');
+}
+function readmeCard(name, body, { loading = false } = {}) {
+  return html`<div class="readme-wrap card">
+    <div class="readme-head">${name || 'README'}</div>
+    ${loading ? html`<p class="muted" style="padding:1rem 1.25rem">Loading…</p>` : body}
+  </div>`;
 }
 
 function conflictSample() {
@@ -1653,7 +1685,7 @@ const RepoView = (org, repo, opts) => {
       ? `bytes=${loc.offset}-${Number(loc.offset) + Number(loc.length) - 1}`
       : '';
     const rawLink = url ? html`<a href=${url} data-external target="_blank" rel="noopener">raw</a>` : nothing;
-    if (b.spError || !b.bytes) {
+    if (!b.bytes) {
       return html`<div class="card binary-note">
         <p>Could not fetch bytes from the storage provider${b.spError ? html`: ${b.spError}` : nothing}.</p>
         ${url ? html`<p>Raw SP URL: <a href=${url} data-external target="_blank" rel="noopener">${url}</a></p>` : nothing}
@@ -1680,30 +1712,40 @@ const RepoView = (org, repo, opts) => {
       lines = lines.slice(0, MAX_BLOB_LINES);
       truncated = true;
     }
+    const name = st.path.split('/').pop() || '';
+    let mdPreview = nothing;
+    if (isMarkdownName(name) && text) {
+      const rendered = b.mdTemplate
+        || renderMarkdown(text, { org, repo, ref: st.ref, dir: parentDir(st.path) }, b.mdImages).template;
+      mdPreview = html`<div class="readme-wrap card blob-md-preview" aria-label="Rendered markdown">
+        <div class="readme-head">Preview</div>
+        ${rendered}
+      </div>`;
+    }
     return html`
-      <div class="blob-head"><span>${st.path.split('/').pop()} · ${fmtSize(size)} ${rawLink}</span>
+      <div class="blob-head"><span>${name} · ${fmtSize(size)} ${rawLink}</span>
         ${range ? html`<span class="tiny-note"><code>${range}</code></span>` : nothing}</div>
       <div class="blob-frame with-head">${codeBlock(st.path, lines.join('\n'), lines.length)}</div>
-      ${truncated ? html`<p class="tiny-note">Preview truncated.</p>` : nothing}`;
+      ${truncated ? html`<p class="tiny-note">Preview truncated.</p>` : nothing}
+      ${mdPreview}`;
   };
 
   const readmeView = () => {
     if (st.kind !== 'tree') return nothing;
     const r = st.readme;
     if (!r) return nothing;
-    if (r.loading) return html`<div class="readme-wrap card"><h2>README</h2><p class="muted">Loading…</p></div>`;
+    if (r.loading) return readmeCard(r.name || 'README', nothing, { loading: true });
     if (!r.bytes) return nothing;
     if (!isLikelyText(r.bytes, r.name)) return nothing;
-    if (r.template) {
-      return html`<div class="readme-wrap card">
-        <h2>${r.name}</h2>
-        ${r.template}
-      </div>`;
+    if (r.template) return readmeCard(r.name, r.template);
+    if (isMarkdownName(r.name)) {
+      const text = decodeUtf8(r.bytes);
+      if (text) {
+        const rendered = renderMarkdown(text, { org, repo, ref: st.ref, dir: st.path }, r.images);
+        return readmeCard(r.name, rendered.template);
+      }
     }
-    return html`<div class="readme-wrap card">
-      <h2>${r.name}</h2>
-      <pre><code>${decodeUtf8(r.bytes)}</code></pre>
-    </div>`;
+    return readmeCard(r.name, html`<pre><code>${decodeUtf8(r.bytes)}</code></pre>`);
   };
 
   const cliSnippets = {
@@ -2715,6 +2757,16 @@ const RepoView = (org, repo, opts) => {
     <p class="tiny-note"><a href="/#/getting-started">Full getting-started guide</a> · <a href="/#/ci">CI on ScionBase</a></p>`;
 
   const view = () => {
+    if (!st.info) {
+      return html`<div class="page"><div class="container"><p class="muted">Loading repository…</p></div></div>`;
+    }
+    if (isRepoNotFound(st.info)) {
+      return html`<div class="page"><div class="container">
+        <h1>Repository not found</h1>
+        <p>The repository <strong>${full}</strong> does not exist.</p>
+        <p><a href=${orgUrl(org)}>View repositories in ${org}</a> · <a href="/#/">Back home</a></p>
+      </div></div>`;
+    }
     const { parts } = parseLocation();
     const showRepoTabs = parts.length === 2; // only when breadcrumbs end at the repo
     return html`<div class="page"><div class="container">
@@ -2862,7 +2914,12 @@ const RepoView = (org, repo, opts) => {
     load: async (rerender) => {
       const b = `/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}`;
       const authed = !!getAuth()?.token;
-      tryGet(b, { org, name: repo, visibility: 'public' }, { auth: authed }).then((s) => { st.info = s; rerender(); });
+      // Never invent repo metadata on 404. A missing repo must not look real
+      // and then fail later with a confusing "ref … not found" tree error.
+      const info = await tryGet(b, null, { auth: authed });
+      st.info = info;
+      rerender();
+      if (isRepoNotFound(info)) return;
       tryGet(`${b}/owners`, { owners: [] }, { auth: authed }).then((s) => { st.owners = s; rerender(); });
       if (authed) refreshMe();
       tryGet(`${b}/branches`, { branches: [{ name: 'main', target: '' }] }).then((s) => {
@@ -2931,7 +2988,24 @@ const RepoView = (org, repo, opts) => {
       if (st.tab !== 'code') return;
       loadCommits(org, repo, st.ref).then((c) => { st.commits = c; rerender(); }).catch(() => {});
       if (st.kind === 'blob' && st.path) {
-        loadBlob(org, repo, st.ref, st.path).then((blob) => { st.blob = blob; rerender(); }).catch((e) => {
+        loadBlob(org, repo, st.ref, st.path).then(async (blob) => {
+          const name = st.path.split('/').pop() || '';
+          if (blob.bytes && isLikelyText(blob.bytes, name) && isMarkdownName(name)) {
+            const text = decodeUtf8(blob.bytes);
+            const dir = parentDir(st.path);
+            const rendered = renderMarkdown(text, { org, repo, ref: st.ref, dir });
+            blob.mdTemplate = rendered.template;
+            blob.mdImages = rendered.images;
+            st.blob = blob;
+            rerender();
+            if (rendered.images.length) {
+              await hydrateReadmeImages(rendered.images, org, repo, st.ref);
+              blob.mdTemplate = renderMarkdown(text, { org, repo, ref: st.ref, dir }, rendered.images).template;
+            }
+          }
+          st.blob = blob;
+          rerender();
+        }).catch((e) => {
           st.blob = { bytes: null, loc: {}, spError: e.message };
           rerender();
         });
@@ -2949,7 +3023,7 @@ const RepoView = (org, repo, opts) => {
           try {
             const blob = await loadBlob(org, repo, st.ref, rpath);
             const text = blob.bytes && isLikelyText(blob.bytes, readmeEnt.name) ? decodeUtf8(blob.bytes) : '';
-            const md = /\.md$/i.test(readmeEnt.name);
+            const md = isMarkdownName(readmeEnt.name);
             let template = null;
             let images = [];
             if (md && text) {
@@ -2964,7 +3038,7 @@ const RepoView = (org, repo, opts) => {
               st.readme.template = renderMarkdown(text, { org, repo, ref: st.ref, dir: st.path }, images).template;
             }
           } catch {
-            st.readme = null;
+            if (!st.readme?.bytes) st.readme = null;
           }
           rerender();
         }
@@ -3055,11 +3129,40 @@ const OrgsView = () => {
       <p class="tiny-note">Your username is your first org. CLI: <code>scn org create &lt;name&gt;</code> · <code>scn org list</code>. <a href="/#/new">New repository</a></p>
     </div></div>`,
     load: async (rerender) => {
+      // GET /v1/orgs is the formal orgs table (today: filecoin-project), not
+      // username namespaces. The Worker adds { id: actor.name, role: "admin" }
+      // on GET /v1/me, so a signed-in list must union /v1/me.orgs and always
+      // include the caller's username.
+      const names = [];
+      const seen = new Set();
+      const add = (id) => {
+        const n = String(id || '').trim();
+        if (!n || seen.has(n)) return;
+        seen.add(n);
+        names.push(n);
+      };
+      const fromList = (list) => {
+        for (const o of list || []) add(typeof o === 'string' ? o : o?.id || o?.name);
+      };
+      if (getAuth()?.token) {
+        let me = getMe();
+        if (!me) me = await refreshMe();
+        add(meName() || getAuth()?.username);
+        fromList(me?.orgs);
+      }
       try {
         const d = await api('/v1/orgs');
-        const list = Array.isArray(d) ? d : d?.orgs || [];
-        st.orgs = list.map((o) => (typeof o === 'string' ? o : o.name || o.id));
-      } catch (e) { st.err = `Could not load organizations (${e.message}).`; st.orgs = null; }
+        fromList(Array.isArray(d) ? d : d?.orgs || []);
+        st.err = '';
+      } catch (e) {
+        if (!names.length) {
+          st.err = `Could not load organizations (${e.message}).`;
+          st.orgs = null;
+          rerender();
+          return;
+        }
+      }
+      st.orgs = names;
       rerender();
     },
   };
@@ -3067,7 +3170,7 @@ const OrgsView = () => {
 
 /* ---------- top bar: breadcrumb + home-only marketing nav ---------- */
 function drawChrome() {
-  const { parts } = parseLocation();
+  let { parts } = parseLocation();
   const isHome = parts.length === 0;
   document.body.classList.toggle('is-home', isHome);
   const mk = document.getElementById('marketing-nav');
@@ -3078,6 +3181,11 @@ function drawChrome() {
   if (!el) return;
   const items = [];
   const sep = () => html`<span class="sep">/</span>`;
+  if (parts[0] === 'orgs' && parts.length > 1) {
+    items.push(html`<a href="/#/orgs">orgs</a>`);
+    items.push(sep());
+    parts = parts.slice(1);
+  }
   if (parts[0] === 'orgs' || parts[0] === 'login' || parts[0] === 'new' || parts[0] === 'getting-started' || parts[0] === 'cli' || parts[0] === 'ci') {
     const label = { orgs: 'orgs', login: 'sign in', new: 'new repository', 'getting-started': 'getting started', cli: 'download CLI', ci: 'CI' }[parts[0]];
     items.push(html`<span>${label}</span>`);
@@ -3169,7 +3277,11 @@ function routeFromParts(parts) {
   if (parts.length === 1 && (parts[0] === 'verified-products' || parts[0] === 'filecoin-verified-products')) {
     return { view: VerifiedProducts, title: 'Filecoin Verified Products — ScionBase' };
   }
-  if (parts.length === 1 && parts[0] === 'orgs') return Object.assign(OrgsView(), { title: 'Organizations — ScionBase' });
+  if (parts[0] === 'orgs') {
+    if (parts.length === 1) return Object.assign(OrgsView(), { title: 'Organizations — ScionBase' });
+    // /#/orgs/:orgName → same as /#/:orgName (do not treat "orgs" as the org).
+    return routeFromParts(parts.slice(1));
+  }
   if (parts.length === 1 && parts[0] === 'login') return LoginView();
   if (parts.length === 1 && parts[0] === 'new') return NewRepoView();
   if (parts.length === 1) {
