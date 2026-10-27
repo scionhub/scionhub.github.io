@@ -477,14 +477,26 @@ async function resolvePiece(org, repo, pieceCid) {
   return row;
 }
 
+function inlineBytesFromLoc(loc) {
+  if (!loc || typeof loc !== 'object') return null;
+  const b64 = loc.contentBase64 || loc.content_base64;
+  if (typeof b64 === 'string' && b64.length) return b64ToBytes(b64);
+  if (loc.bytes instanceof Uint8Array && loc.bytes.length) return loc.bytes;
+  if (typeof loc.content === 'string' && loc.content.length) return new TextEncoder().encode(loc.content);
+  return null;
+}
+
 async function bytesFromHint(org, repo, hint) {
   const loc = { ...hint };
+  // Blob payloads may include both contentBase64 and a pieceCid. Resolve can
+  // 400 even when inline bytes are already present — use those first.
+  const inline = inlineBytesFromLoc(loc);
+  if (inline) return { bytes: inline, loc };
   if ((!loc.url || loc.offset == null) && loc.pieceCid) {
     Object.assign(loc, await resolvePiece(org, repo, loc.pieceCid));
   }
-  if (loc.contentBase64) {
-    return { bytes: b64ToBytes(loc.contentBase64), loc };
-  }
+  const afterResolve = inlineBytesFromLoc(loc);
+  if (afterResolve) return { bytes: afterResolve, loc };
   if (loc.url) {
     try {
       const bytes = await fetchRange(loc.url, loc.offset, loc.length ?? loc.size);
