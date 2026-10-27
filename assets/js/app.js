@@ -184,6 +184,67 @@ function pullUrl(org, repo, n, tab) {
   else if (tab === 'conversation') extra.push('conversation');
   return repoUrl(org, repo, extra);
 }
+function userUrl(name) {
+  return hashUrl(['u', name]);
+}
+function personName(obj) {
+  if (obj == null) return '';
+  if (typeof obj === 'string') return String(obj).trim();
+  return String(obj.user || obj.user_name || obj.author || obj.author_name || obj.name || obj.username || '').trim();
+}
+function userLink(name, fallback = 'unknown') {
+  const n = String(name || '').trim();
+  if (!n) return fallback;
+  if (!USER_RE.test(n)) return n;
+  return html`<a class="user-link" href=${userUrl(n)}>${n}</a>`;
+}
+function pullAuthorName(p) {
+  return String(p?.author || p?.author_name || p?.user || p?.user_name || p?.username || '').trim() || 'unknown';
+}
+function pullStatusLabel(p) {
+  if (!p) return 'open';
+  if (p.merged === true || p.merged_at) return 'merged';
+  const raw = String(p.state || 'open').toLowerCase();
+  if (raw === 'merged') return 'merged';
+  if (raw === 'closed') return 'closed';
+  return 'open';
+}
+const TAGLINE_MAX = 200;
+function extractTagline(obj) {
+  if (!obj || typeof obj !== 'object') return '';
+  const nested = obj.user && typeof obj.user === 'object' ? obj.user : obj;
+  const t = nested.tagline ?? nested.bio ?? obj.tagline ?? obj.bio ?? obj.profile?.tagline;
+  return t == null ? '' : String(t);
+}
+function collectRepos(data, defaultOrg) {
+  const raw = Array.isArray(data) ? data
+    : Array.isArray(data?.repos) ? data.repos
+      : Array.isArray(data?.ownedRepos) ? data.ownedRepos
+        : Array.isArray(data?.owned_repos) ? data.owned_repos
+          : [];
+  const out = [];
+  const seen = new Set();
+  for (const r of raw) {
+    const org = typeof r === 'string' ? defaultOrg : (r.org || r.owner || r.namespace || defaultOrg);
+    const name = typeof r === 'string' ? r : (r.name || r.repo);
+    if (!org || !name) continue;
+    const key = `${org}/${name}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ org, name });
+  }
+  return out;
+}
+async function changeMyPassword({ currentPassword, newPassword }) {
+  return api('/v1/auth/change-password', {
+    method: 'POST',
+    auth: true,
+    body: { current_password: currentPassword, new_password: newPassword },
+  });
+}
+async function patchMyProfile(body) {
+  return api('/v1/me', { method: 'PATCH', auth: true, body });
+}
 function apiRef(ref) {
   return String(ref).split('/').map(encodeURIComponent).join('/');
 }
@@ -932,20 +993,101 @@ async function loadFileDiffs(org, repo, baseRev, headRev, files) {
   return { rows, truncated: files.length > MAX_DIFF_FILES, total: files.length };
 }
 
-async function loadBlob(org, repo, ref, path) {
+function isRefNotFoundMessage(msg) {
+  return /ref\s+"[^"]+"\s+not found/i.test(String(msg || ''));
+}
+function friendlyFileError(err) {
+  const msg = err?.message || String(err || '');
+  if (isRefNotFoundMessage(msg)) return 'Could not load file.';
+  return msg || 'Could not load file.';
+}
+function refAlias(ref) {
+  const r = String(ref || 'main');
+  if (r.startsWith('refs/heads/')) return r.slice('refs/heads/'.length) || 'main';
+  if (r.startsWith('refs/tags/')) return r.slice('refs/tags/'.length);
+  if (!r.startsWith('refs/')) return `refs/heads/${r}`;
+  return '';
+}
+function refAttempts(ref) {
+  const first = String(ref || 'main');
+  const alt = refAlias(first);
+  return [first, alt].filter((r, i, a) => r && a.indexOf(r) === i);
+}
+function entryPieceCid(entry) {
+  if (!entry || typeof entry !== 'object') return '';
+  return String(entry.pieceCid || entry.piece_cid || entry.pcid || '').trim();
+}
+function hintFromEntry(entry, path) {
+  if (!entry) return null;
+  const pieceCid = entryPieceCid(entry);
+  const size = entrySize(entry);
+  const hint = {
+    path,
+    pieceCid: pieceCid || undefined,
+    size,
+    length: size ?? entry.length,
+    contentBase64: entry.contentBase64 || entry.content_base64,
+    content: entry.content,
+    url: entry.url,
+    offset: entry.offset,
+  };
+  if (!hint.pieceCid && !inlineBytesFromLoc(hint) && !hint.url) return null;
+  return hint;
+}
+async function findPathEntry(org, repo, ref, path, known) {
+  const segs = String(path || '').split('/').filter(Boolean);
+  const name = segs[segs.length - 1];
+  const dir = segs.slice(0, -1).join('/');
+  const fromList = (entries) => (entries || []).find((e) => e && e.name === name && kindOf(e) !== 'dir') || null;
+  if (known && !Array.isArray(known) && known.name === name) return known;
+  if (Array.isArray(known)) {
+    const hit = fromList(known);
+    if (hit) return hit;
+  }
+  for (const r of refAttempts(ref)) {
+    try {
+      const q = dir ? `?path=${encodeURIComponent(dir)}` : '';
+      const data = await api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/tree/${apiRef(r)}${q}`);
+      const hit = fromList(data.entries || []);
+      if (hit) return hit;
+    } catch { /* try the other ref form or snapshot */ }
+  }
+  return null;
+}
+
+async function loadBlob(org, repo, ref, path, opts = {}) {
+  let lastErr = null;
+  for (const r of refAttempts(ref)) {
+    try {
+      const data = await api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/blob/${apiRef(r)}?path=${encodeURIComponent(path)}`);
+      const fetched = await bytesFromHint(org, repo, data);
+      return { live: true, data, ...fetched };
+    } catch (e) {
+      lastErr = e;
+    }
+  }
   try {
-    const data = await api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/blob/${apiRef(ref)}?path=${encodeURIComponent(path)}`);
-    const fetched = await bytesFromHint(org, repo, data);
-    return { live: true, data, ...fetched };
-  } catch (e) {
+    const entry = await findPathEntry(org, repo, ref, path, opts.entry || opts.entries);
+    const hint = hintFromEntry(entry, path);
+    if (hint) {
+      const fetched = await bytesFromHint(org, repo, hint);
+      return { live: false, fallback: true, error: lastErr?.message, data: { path, ...hint, ...fetched.loc }, ...fetched };
+    }
+  } catch (e2) {
+    if (!isRefNotFoundMessage(e2.message)) lastErr = e2;
+  }
+  try {
     const { cs } = await loadSnapshot(org, repo, ref);
     const pieceCid = cs?.metadata?.[`pcid:${path}`];
     const change = (cs?.changes || []).find((c) => c.path === path);
-    if (!pieceCid && !change) throw e;
-    const hint = { pieceCid, size: change?.size, path };
-    const fetched = await bytesFromHint(org, repo, hint);
-    return { live: false, fallback: true, error: e.message, data: { path, pieceCid, ...fetched.loc }, ...fetched };
-  }
+    if (pieceCid || change) {
+      const hint = { pieceCid: pieceCid || change?.pieceCid, size: change?.size, path };
+      const fetched = await bytesFromHint(org, repo, hint);
+      return { live: false, fallback: true, error: lastErr?.message, data: { path, pieceCid: hint.pieceCid, ...fetched.loc }, ...fetched };
+    }
+  } catch { /* keep lastErr */ }
+  if (lastErr) throw lastErr;
+  throw new Error('Could not load file.');
 }
 
 async function loadCommits(org, repo, ref) {
@@ -1396,6 +1538,168 @@ const OrgView = (org) => {
   } };
 };
 
+/* ---------- user home / settings ---------- */
+const UserView = (name) => {
+  const isSelf = () => {
+    const me = (meName() || '').toLowerCase();
+    return !!me && me === String(name || '').toLowerCase();
+  };
+  const st = {
+    profile: null,
+    repos: null,
+    reposErr: '',
+    tagline: '',
+    taglineBusy: false,
+    taglineErr: '',
+    taglineOk: '',
+    pwBusy: false,
+    pwErr: '',
+    pwOk: '',
+  };
+
+  async function onChangePassword(e) {
+    e.preventDefault();
+    if (st.pwBusy) return;
+    const fd = new FormData(e.target);
+    const currentPassword = String(fd.get('current_password') || '');
+    const newPassword = String(fd.get('new_password') || '');
+    st.pwErr = ''; st.pwOk = ''; st.pwBusy = true; draw();
+    try {
+      if (newPassword.length < 10) throw new Error('new password must be at least 10 characters');
+      if (currentPassword === newPassword) throw new Error('new password must be different from the current password');
+      await changeMyPassword({ currentPassword, newPassword });
+      st.pwOk = 'Password updated.';
+      e.target.reset();
+    } catch (err) {
+      st.pwErr = err.message || String(err);
+    }
+    st.pwBusy = false;
+    draw();
+  }
+
+  async function onSaveTagline(e) {
+    e.preventDefault();
+    if (st.taglineBusy) return;
+    const tagline = String(st.tagline || '').slice(0, TAGLINE_MAX);
+    st.taglineErr = ''; st.taglineOk = ''; st.taglineBusy = true; draw();
+    try {
+      const data = await patchMyProfile({ tagline });
+      st.tagline = extractTagline(data) || tagline;
+      if (st.profile?.data) {
+        const dest = st.profile.data.user && typeof st.profile.data.user === 'object'
+          ? st.profile.data.user
+          : st.profile.data;
+        dest.tagline = st.tagline;
+      }
+      st.taglineOk = 'Profile saved.';
+    } catch (err) {
+      st.taglineErr = err.message || String(err);
+    }
+    st.taglineBusy = false;
+    draw();
+  }
+
+  const comingSoon = (title) => html`<section class="card coming-soon" aria-disabled="true">
+    <h3 style="margin-top:0">${title}</h3>
+    <p class="muted" style="margin:0">Coming soon</p>
+  </section>`;
+
+  return {
+    view: () => {
+      const self = isSelf();
+      const publicTagline = extractTagline(st.profile?.live ? st.profile.data : null);
+      const repos = st.repos;
+      return html`<div class="page-head"><div class="container"><div class="subnav">
+        ${self && getAuth() ? html`<a class="btn btn-primary" href="/#/new">New repository</a>` : nothing}
+      </div></div></div>
+      <div class="page"><div class="container layout-2col">
+        <aside class="sidebar"><div class="card">
+          <div style="display:flex;align-items:center;gap:.75rem;">
+            <div class="org-avatar" aria-hidden="true">${String(name).slice(0, 2).toUpperCase()}</div>
+            <div>
+              <h2 style="margin:0">${name}</h2>
+              <div class="tiny-note">@${name}${self ? ' · you' : ''}</div>
+            </div>
+          </div>
+          ${self ? nothing
+            : st.profile?.live && String(publicTagline).trim()
+              ? html`<p class="user-tagline">${publicTagline}</p>`
+              : st.profile?.live
+                ? html`<p class="muted" style="margin:.9rem 0 0">No tagline.</p>`
+                : nothing}
+        </div></aside>
+        <section class="content">
+          <h3 style="margin-bottom:.5rem;">Repositories</h3>
+          <ul class="repo-list">${!repos ? html`<li class="repo-item"><span class="muted">${st.reposErr || 'Loading…'}</span></li>`
+            : repos.length ? repos.map((r) => html`<li class="repo-item"><a href=${repoUrl(r.org, r.name)}><strong>${r.org}/${r.name}</strong></a><span class="badge">public</span></li>`)
+            : html`<li class="repo-item"><span class="muted">${st.reposErr || 'No public repositories.'}</span></li>`}</ul>
+          ${self ? html`<div class="user-settings">
+            <h2>Settings</h2>
+            <form class="card form" @submit=${onChangePassword}>
+              <h3 style="margin-top:0">Change password</h3>
+              <label for="pw-current">Current password</label>
+              <input id="pw-current" name="current_password" type="password" autocomplete="current-password" required minlength="10" />
+              <label for="pw-new">New password</label>
+              <input id="pw-new" name="new_password" type="password" autocomplete="new-password" required minlength="10" />
+              <div class="form-actions"><button class="btn btn-primary" type="submit" ?disabled=${st.pwBusy}>${st.pwBusy ? 'Updating…' : 'Update password'}</button></div>
+              ${st.pwErr ? html`<p class="form-error">${st.pwErr}</p>` : nothing}
+              ${st.pwOk ? html`<p class="form-ok">${st.pwOk}</p>` : nothing}
+            </form>
+            ${comingSoon('Billing')}
+            ${comingSoon('Notifications')}
+            <form class="card form" @submit=${onSaveTagline}>
+              <h3 style="margin-top:0">Profile</h3>
+              <label for="me-tagline">Tagline</label>
+              <textarea id="me-tagline" rows="3" maxlength=${String(TAGLINE_MAX)} .value=${st.tagline}
+                @input=${(e) => {
+                  st.tagline = String(e.target.value || '').slice(0, TAGLINE_MAX);
+                  const el = document.getElementById('tagline-count');
+                  if (el) el.textContent = `${st.tagline.length} / ${TAGLINE_MAX}`;
+                }}></textarea>
+              <p id="tagline-count" class="char-count">${(st.tagline || '').length} / ${TAGLINE_MAX}</p>
+              <div class="form-actions"><button class="btn btn-primary" type="submit" ?disabled=${st.taglineBusy}>${st.taglineBusy ? 'Saving…' : 'Save profile'}</button></div>
+              ${st.taglineErr ? html`<p class="form-error">${st.taglineErr}</p>` : nothing}
+              ${st.taglineOk ? html`<p class="form-ok">${st.taglineOk}</p>` : nothing}
+            </form>
+          </div>` : nothing}
+        </section>
+      </div></div>`;
+    },
+    load: async (rerender) => {
+      const self = isSelf();
+      if (self && getAuth()?.token && !getMe()) await refreshMe();
+      const profile = await tryGet(`/v1/users/${encodeURIComponent(name)}`, null, { auth: !!getAuth()?.token });
+      st.profile = profile;
+      if (self) {
+        st.tagline = extractTagline(profile?.live ? profile.data : null) || extractTagline(getMe()) || '';
+      }
+
+      const seen = new Set();
+      const repos = [];
+      const addAll = (list) => {
+        for (const r of list || []) {
+          const key = `${r.org}/${r.name}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          repos.push(r);
+        }
+      };
+      if (profile?.live) addAll(collectRepos(profile.data, name));
+      if (self) addAll(collectRepos(getMe()?.ownedRepos || getMe()?.owned_repos, name));
+      const orgRepos = await tryGet(`/v1/orgs/${encodeURIComponent(name)}/repos`, []);
+      if (orgRepos.live) {
+        let list = orgRepos.data;
+        if (!Array.isArray(list)) list = list?.repos || [];
+        addAll(collectRepos(list, name));
+      } else if (!repos.length && orgRepos.status && orgRepos.status !== 404) {
+        st.reposErr = orgRepos.error || 'Could not load repositories.';
+      }
+      st.repos = repos;
+      rerender();
+    },
+  };
+};
+
 /* ---------- Boards ---------- */
 const BoardsView = () => {
   const st = { boards: null, err: '', formErr: '', busy: false, orgs: null, repos: [], orgSel: '', repoSel: '', name: '', tag: '' };
@@ -1646,7 +1950,7 @@ const RepoView = (org, repo, opts) => {
     }
     return html`<div class="commit-bar">
       <span class="msg">${c.message || '(no message)'}</span>
-      <span class="tiny-note">${c.author || ''}</span>
+      <span class="tiny-note">${c.author ? userLink(c.author, c.author) : ''}</span>
       <span class="tiny-note">${fmtTime(c.created_at)}</span>
       <span class="mono" title=${c.id}>${shortId(c.id)}</span>
     </div>`;
@@ -1686,10 +1990,15 @@ const RepoView = (org, repo, opts) => {
       : '';
     const rawLink = url ? html`<a href=${url} data-external target="_blank" rel="noopener">raw</a>` : nothing;
     if (!b.bytes) {
+      const rawErr = b.spError || b.error || b.loadError || '';
+      const engineRef = isRefNotFoundMessage(rawErr);
+      const msg = engineRef || b.loadError
+        ? (b.loadError || 'Could not load file.')
+        : (b.spError ? `Could not fetch bytes from the storage provider: ${b.spError}` : 'Could not fetch bytes from the storage provider.');
       return html`<div class="card binary-note">
-        <p>Could not fetch bytes from the storage provider${b.spError ? html`: ${b.spError}` : nothing}.</p>
-        ${url ? html`<p>Raw SP URL: <a href=${url} data-external target="_blank" rel="noopener">${url}</a></p>` : nothing}
-        ${range ? html`<p>Range: <code>${range}</code></p>` : nothing}
+        <p>${msg}</p>
+        ${!engineRef && url ? html`<p>Raw SP URL: <a href=${url} data-external target="_blank" rel="noopener">${url}</a></p>` : nothing}
+        ${!engineRef && range ? html`<p>Range: <code>${range}</code></p>` : nothing}
         ${loc.pieceCid ? html`<p class="tiny-note">PieceCID <span class="mono">${loc.pieceCid}</span></p>` : nothing}
       </div>`;
     }
@@ -2033,7 +2342,7 @@ const RepoView = (org, repo, opts) => {
     return html`
     <div class=${`pr-comment${resolved ? ' is-resolved' : ''}${resolved && !expanded ? ' is-collapsed' : ''}`}>
       <div class="pr-comment-meta">
-        <strong>${c.author || c.user || c.author_name || 'unknown'}</strong>
+        <strong>${userLink(c.author || c.user || c.author_name)}</strong>
         <span class="tiny-note">${fmtTime(c.created_at)}</span>
         ${resolved && !expanded ? html`<span class="tiny-note">Resolved comment</span>` : nothing}
         ${resolved ? html`<button class="btn btn-ghost btn-tiny" type="button" @click=${toggleOpen}>${expanded ? 'Hide' : 'Show'}</button>` : nothing}
@@ -2107,7 +2416,7 @@ const RepoView = (org, repo, opts) => {
           </div>
           <div class="pr-meta-row">
             <span class="badge pr-state">${isDraft ? 'draft' : state}</span>
-            <span>${author}</span>
+            <span>${userLink(author)}</span>
             <span class="mono">${head} → ${base}</span>
             <span class="tiny-note">${fmtTime(d.created_at)}</span>
           </div>
@@ -2135,14 +2444,14 @@ const RepoView = (org, repo, opts) => {
         ${!st.reviews ? nothing
           : (st.reviews.live === false && st.reviews.status === 404) ? html`<p class="muted">Reviews are not available on this API yet.</p>`
           : (reviews.length ? html`<ul class="pr-approval-list">${reviews.map((r) => html`<li>
-              <strong>${r.user || r.author || 'unknown'}</strong>
+              <strong>${userLink(r.user || r.author)}</strong>
               <span class="owner-badge">changes requested</span>
               <span class="tiny-note">${fmtTime(r.created_at)}</span>
             </li>`)}</ul>` : nothing)
         }
         ${!st.approvals ? html`<p class="muted">Loading approvals…</p>`
           : approvals.length ? html`<ul class="pr-approval-list">${approvals.map((a) => html`<li>
-              <strong>${a.user || a.author || 'unknown'}</strong>
+              <strong>${userLink(a.user || a.author)}</strong>
               ${approvalIsOwner(a, owners) ? html`<span class="owner-badge">owner</span>` : nothing}
               ${approvalCounts(a) ? nothing : html`<span class="tiny-note">(does not count${approvalIsOwner(a, owners) ? ': author' : ': not an owner'})</span>`}
               <span class="tiny-note">${fmtTime(a.created_at)}</span>
@@ -2433,20 +2742,23 @@ const RepoView = (org, repo, opts) => {
           ${st.prTab === 'files' ? html`<div class="pr-code-checks">${checksSection(true)}</div>${filesPane(d)}` : conversationPane(d)}
         </div>`;
     }
-    const rows = pullList(st.pulls).filter((p) => (p.state || 'open') === 'open');
+    const rows = pullList(st.pulls);
     return html`
       <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap;">
-        <h2 style="margin:.2rem 0">Open pull requests</h2>
+        <h2 style="margin:.2rem 0">Pull requests</h2>
         ${getAuth()?.token ? html`<a class="btn btn-primary" href=${repoUrl(org, repo, ['pulls', 'new'])}>New pull request</a>` : nothing}
       </div>
       ${!st.pulls ? html`<p class="muted">Loading…</p>`
         : !st.pulls.live ? html`<p class="muted">Couldn't load pull requests (${st.pulls.error}). Try <code>scn pr list</code>.</p>`
-        : rows.length ? html`<ul class="repo-list">${rows.map((p) => html`<li class="repo-item pr-item">
-            <a href=${repoUrl(org, repo, ['pulls', String(p.number)])}><strong>#${p.number}</strong> ${p.title}</a>
-            <span class="badge">${(p.draft === true || String(p.state || '').toLowerCase() === 'draft') ? 'draft' : (p.state || 'open')}</span>
-            <span class="pr-meta">${p.author || p.author_name || 'unknown'} · ${p.head_ref || p.head || ''} → ${p.base_ref || p.base || 'main'} · ${fmtTime(p.created_at)}</span>
+        : rows.length ? html`<ul class="repo-list">${rows.map((p) => html`<li class="repo-item pr-item" @click=${(e) => {
+            if (e.target.closest('a')) return;
+            navigate(repoUrl(org, repo, ['pulls', String(p.number)]));
+          }}>
+            <a class="pr-title" href=${repoUrl(org, repo, ['pulls', String(p.number)])}><strong>${p.title || `#${p.number}`}</strong></a>
+            <span class="pr-author">${userLink(pullAuthorName(p))}</span>
+            <span class="badge pr-state">${pullStatusLabel(p)}</span>
           </li>`)}</ul>`
-        : html`<p class="muted">No open pull requests.</p>`}
+        : html`<p class="muted">No pull requests.</p>`}
       ${cliPanel()}`;
   };
 
@@ -2713,8 +3025,8 @@ const RepoView = (org, repo, opts) => {
         ${!st.owners ? html`<p class="muted">Loading owners…</p>`
           : ownersMissing ? html`<p class="muted">Owner management is not available on this API yet.</p>`
           : owners.length ? html`<ul class="owner-list">${owners.map((o) => html`<li>
-              <span><strong>${o.user || o.user_name || 'unknown'}</strong>
-                ${o.added_by ? html`<span class="tiny-note">added by ${o.added_by}</span>` : nothing}
+              <span><strong>${userLink(o.user || o.user_name)}</strong>
+                ${o.added_by ? html`<span class="tiny-note">added by ${userLink(o.added_by, o.added_by)}</span>` : nothing}
               </span>
               <button class="btn btn-ghost btn-tiny" type="button" ?disabled=${st.ownerBusy || owners.length <= 1}
                 @click=${() => removeOwner(o.user || o.user_name)}>Remove</button>
@@ -2839,7 +3151,7 @@ const RepoView = (org, repo, opts) => {
           </div>
           <div class="pr-meta-row">
             <span class="badge pr-state">${state}</span>
-            <span>${d.author || d.user || d.author_name || 'unknown'}</span>
+            <span>${userLink(d.author || d.user || d.author_name)}</span>
             <span class="tiny-note">${fmtTime(d.created_at)}</span>
           </div>
           ${d.tag ? html`<p class="tiny-note">Tag: <strong>${d.tag}</strong></p>` : nothing}
@@ -2988,7 +3300,7 @@ const RepoView = (org, repo, opts) => {
       if (st.tab !== 'code') return;
       loadCommits(org, repo, st.ref).then((c) => { st.commits = c; rerender(); }).catch(() => {});
       if (st.kind === 'blob' && st.path) {
-        loadBlob(org, repo, st.ref, st.path).then(async (blob) => {
+        loadBlob(org, repo, st.ref, st.path, { entries: st.tree?.entries }).then(async (blob) => {
           const name = st.path.split('/').pop() || '';
           if (blob.bytes && isLikelyText(blob.bytes, name) && isMarkdownName(name)) {
             const text = decodeUtf8(blob.bytes);
@@ -3006,7 +3318,8 @@ const RepoView = (org, repo, opts) => {
           st.blob = blob;
           rerender();
         }).catch((e) => {
-          st.blob = { bytes: null, loc: {}, spError: e.message };
+          const msg = friendlyFileError(e);
+          st.blob = { bytes: null, loc: {}, error: e.message, loadError: msg, spError: isRefNotFoundMessage(e.message) ? '' : e.message };
           rerender();
         });
         return;
@@ -3021,7 +3334,7 @@ const RepoView = (org, repo, opts) => {
           st.readme = { loading: true, name: readmeEnt.name };
           rerender();
           try {
-            const blob = await loadBlob(org, repo, st.ref, rpath);
+            const blob = await loadBlob(org, repo, st.ref, rpath, { entry: readmeEnt });
             const text = blob.bytes && isLikelyText(blob.bytes, readmeEnt.name) ? decodeUtf8(blob.bytes) : '';
             const md = isMarkdownName(readmeEnt.name);
             let template = null;
@@ -3186,7 +3499,13 @@ function drawChrome() {
     items.push(sep());
     parts = parts.slice(1);
   }
-  if (parts[0] === 'orgs' || parts[0] === 'login' || parts[0] === 'new' || parts[0] === 'getting-started' || parts[0] === 'cli' || parts[0] === 'ci') {
+  if (parts[0] === 'u') {
+    items.push(html`<span>u</span>`);
+    if (parts[1]) {
+      items.push(sep());
+      items.push(html`<a href=${userUrl(parts[1])}>${parts[1]}</a>`);
+    }
+  } else if (parts[0] === 'orgs' || parts[0] === 'login' || parts[0] === 'new' || parts[0] === 'getting-started' || parts[0] === 'cli' || parts[0] === 'ci') {
     const label = { orgs: 'orgs', login: 'sign in', new: 'new repository', 'getting-started': 'getting started', cli: 'download CLI', ci: 'CI' }[parts[0]];
     items.push(html`<span>${label}</span>`);
   } else if (parts.length >= 1) {
@@ -3282,6 +3601,22 @@ function routeFromParts(parts) {
     // /#/orgs/:orgName → same as /#/:orgName (do not treat "orgs" as the org).
     return routeFromParts(parts.slice(1));
   }
+  if (parts[0] === 'u') {
+    const name = parts[1] || '';
+    if (!name) {
+      return {
+        title: 'Account — ScionBase',
+        view: () => getAuth()
+          ? html`<div class="page"><div class="container"><p class="muted">Loading account…</p></div></div>`
+          : html`<div class="page"><div class="container"><h1>Account</h1><p class="tiny-note"><a href="/#/login">Sign in</a> to view your profile and settings.</p></div></div>`,
+        load: async () => {
+          const self = meName() || getAuth()?.username;
+          if (self) navigate(userUrl(self));
+        },
+      };
+    }
+    return Object.assign(UserView(name), { title: `${name} — ScionBase` });
+  }
   if (parts.length === 1 && parts[0] === 'login') return LoginView();
   if (parts.length === 1 && parts[0] === 'new') return NewRepoView();
   if (parts.length === 1) {
@@ -3329,7 +3664,7 @@ function drawNav() {
   if (!el) return;
   const a = getAuth();
   const inner = a
-    ? html`<a class="btn btn-primary" href="/#/new">New</a><span class="nav-user">${meName() || a.username}</span><button class="btn btn-ghost" type="button" @click=${() => { setAuth(null); if (location.hash.startsWith('#/new') || location.hash.startsWith('#/login')) navigate('/#/'); else draw(); }}>Log out</button>`
+    ? html`<a class="btn btn-primary" href="/#/new">New</a><a class="nav-user" href=${userUrl(meName() || a.username)}>${meName() || a.username}</a><button class="btn btn-ghost" type="button" @click=${() => { setAuth(null); if (location.hash.startsWith('#/new') || location.hash.startsWith('#/login') || location.hash.startsWith('#/u/')) navigate('/#/'); else draw(); }}>Log out</button>`
     : html`<a class="btn btn-ghost" href="/#/login">Sign in</a>`;
   render(inner, el);
 }
