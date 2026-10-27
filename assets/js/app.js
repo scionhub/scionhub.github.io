@@ -243,7 +243,7 @@ async function changeMyPassword({ currentPassword, newPassword }) {
   });
 }
 async function patchMyProfile(body) {
-  return api('/v1/profile/me', { method: 'PATCH', auth: true, body });
+  return api('/v1/me', { method: 'PATCH', auth: true, body });
 }
 function apiRef(ref) {
   return String(ref).split('/').map(encodeURIComponent).join('/');
