@@ -187,6 +187,12 @@ function pullUrl(org, repo, n, tab) {
 function userUrl(name) {
   return hashUrl(['u', name]);
 }
+function boardsUrl(org) {
+  return hashUrl(['orgs', org, 'boards']);
+}
+function boardUrl(org, id) {
+  return hashUrl(['orgs', org, 'boards', String(id)]);
+}
 function personName(obj) {
   if (obj == null) return '';
   if (typeof obj === 'string') return String(obj).trim();
@@ -816,19 +822,25 @@ function lineComments(comments, path, line, side) {
   });
 }
 
-function meIsPrAuthor(d) {
-  if (!getAuth()?.token) return false;
+function meIsAuthor(d) {
+  if (!getAuth()?.token || !d) return false;
   const id = getMe()?.user?.id;
-  if (id && d?.author_user_id && String(id) === String(d.author_user_id)) return true;
+  if (id != null && d.author_user_id != null && String(id) === String(d.author_user_id)) return true;
   const name = meName();
-  return !!(name && (name === d?.author || name === d?.author_name));
+  return !!(name && (name === d.author || name === d.author_name || name === d.user || name === d.username));
 }
+function meIsPrAuthor(d) { return meIsAuthor(d); }
 
 function commentIsMine(c) {
   const me = getMe()?.user;
   const name = meName();
   if (!me && !name) return false;
-  if (me?.id && (c.author_user_id === me.id || c.user_id === me.id || c.user === me.id)) return true;
+  if (me?.id != null) {
+    const id = String(me.id);
+    if (c.author_user_id != null && String(c.author_user_id) === id) return true;
+    if (c.user_id != null && String(c.user_id) === id) return true;
+    if (c.user != null && String(c.user) === id) return true;
+  }
   return !!(name && (c.author === name || c.user === name || c.author_name === name));
 }
 
@@ -1363,7 +1375,7 @@ const GettingStarted = () => html`
     <p>Merge is org member/admin; close is the author or an admin. Fast-forward when the head changeset’s first parent is still the current base.</p>
     ${pre(['scn pr create --title "My change"', 'scn pr create --title "My change" --body "details"', 'scn pr list', 'scn pr show 1', 'scn pr merge 1', 'scn pr close 1'])}
     <p class="tiny-note">On the web: create a pull request (including <strong>draft</strong>), <strong>approve</strong> or <strong>request changes</strong>, and choose <strong>Fast‑forward</strong> or <strong>Squash</strong> when merging.</p>
-    <p class="tiny-note"><strong>Fixes</strong>: add issue numbers (e.g. <code>12, 15</code>) to a PR to close those issues automatically when it merges. <strong>Issues</strong> can include a short <em>tag</em> on create/edit and the Issues list supports filtering by <code>?tag=</code>. Use <strong>Boards</strong> to save a repo+tag filter and see matching issues at a glance.</p>
+    <p class="tiny-note"><strong>Fixes</strong>: add issue numbers (e.g. <code>12, 15</code>) to a PR to close those issues automatically when it merges. <strong>Issues</strong> can include a short <em>tag</em> on create/edit and the Issues list supports filtering by <code>?tag=</code>. Title and description are editable only by the issue author; anyone signed in can comment. Use <strong>Boards</strong> (owned by an organization, at <a href="/#/boards">/#/boards</a> or <code>/#/orgs/:org/boards</code>) to save a tag/state filter and see matching issues at a glance — including issues from other orgs.</p>
     <h2 id="completion">8. Completion</h2>
     ${pre(['scn completion bash', 'scn completion zsh', 'scn completion fish'])}
     <p>Browse <a href="/#/orgs">organizations</a>.</p>
@@ -1514,6 +1526,7 @@ const OrgView = (org) => {
   const view = (s) => html`
     <div class="page-head"><div class="container"><div class="subnav">
             ${getAuth() ? html`<a class="btn btn-primary" href="/#/new">New repository</a>` : nothing}
+            <a class="btn" href=${boardsUrl(org)}>Boards</a>
     </div></div></div>
     <div class="page"><div class="container layout-2col">
       <aside class="sidebar"><div class="card">
@@ -1527,7 +1540,7 @@ const OrgView = (org) => {
         <ul class="repo-list">${!s ? html`<li class="repo-item"><span class="muted">Loading…</span></li>`
           : s.data.length ? s.data.map((r) => html`<li class="repo-item"><a href=${repoUrl(org, r)}><strong>${org}/${r}</strong></a><span class="badge">public</span></li>`)
           : html`<li class="repo-item"><span class="muted">No repositories yet.</span></li>`}</ul>
-        <p class="tiny-note">Have code to bring? <a href="/#/getting-started">Clone and push with <code>scn</code></a>.</p>
+        <p class="tiny-note">Have code to bring? <a href="/#/getting-started">Clone and push with <code>scn</code></a>. Organization boards: <a href=${boardsUrl(org)}>view boards</a>.</p>
       </section>
     </div></div>`;
   return { view: () => view(st.s), load: async (rerender) => {
@@ -1700,100 +1713,194 @@ const UserView = (name) => {
   };
 };
 
-/* ---------- Boards ---------- */
-const BoardsView = () => {
-  const st = { boards: null, err: '', formErr: '', busy: false, orgs: null, repos: [], orgSel: '', repoSel: '', name: '', tag: '' };
-  async function loadReposFor(org) {
-    st.repos = [];
-    if (!org) return;
-    try {
-      const d = await api(`/v1/orgs/${encodeURIComponent(org)}/repos`);
-      const list = Array.isArray(d) ? d : d?.repos || [];
-      st.repos = list.map((r) => (typeof r === 'string' ? r : r.name));
-    } catch { st.repos = []; }
-    draw();
+/* ---------- Boards (org-owned; issues may be cross-org) ---------- */
+function boardKey(b) {
+  return b?.id || b?.number || b?.name || '';
+}
+function boardsFrom(data) {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.boards)) return data.boards;
+  return [];
+}
+function unwrapBoardGet(data) {
+  const nested = data?.board && typeof data.board === 'object' ? data.board : null;
+  const board = nested ? { ...data, ...nested } : (data && typeof data === 'object' ? data : {});
+  const issues = Array.isArray(data?.issues) ? data.issues : (Array.isArray(data) ? data : []);
+  return { board, issues };
+}
+function apiUnavailable(result) {
+  return !!(result && result.live === false && (result.status === 404 || result.status === 405));
+}
+function formatBoardSources(sources) {
+  if (!Array.isArray(sources) || !sources.length) return '';
+  return sources.map((s) => {
+    if (typeof s === 'string') return s;
+    const o = s?.org || s?.owner || '';
+    const r = s?.repo || s?.name || '';
+    if (!o) return r || '';
+    return r ? `${o}/${r}` : o;
+  }).filter(Boolean).join(', ');
+}
+function boardCreateBody(st) {
+  const name = String(st.name || '').trim();
+  if (!name) throw new Error('name is required');
+  const body = { name };
+  const tag = String(st.tag || '').trim();
+  const state = String(st.state || '').trim();
+  if (tag) body.tag = tag;
+  if (state) body.state = state;
+  const sources = (st.sources || []).map((s) => {
+    const o = String(s.org || '').trim();
+    const r = String(s.repo || '').trim();
+    if (!o) return null;
+    return r ? { org: o, repo: r } : { org: o };
+  }).filter(Boolean);
+  if (sources.length) body.sources = sources;
+  return body;
+}
+function boardMetaNote(board, ownerOrg) {
+  const org = board.org || ownerOrg || '';
+  const src = formatBoardSources(board.sources);
+  const bits = [];
+  if (org) bits.push(html`Owned by <a href=${orgUrl(org)}>${org}</a>`);
+  if (board.tag) bits.push(html`tag: <strong>${board.tag}</strong>`);
+  if (board.state) bits.push(html`state: ${board.state}`);
+  bits.push(src ? html`sources: ${src}` : html`sources: any org`);
+  return html`<p class="tiny-note">${bits.map((b, i) => html`${i ? ' · ' : nothing}${b}`)}</p>`;
+}
+function boardIssueRow(i, fallbackOrg) {
+  const o = i.org || i.owner || fallbackOrg || '';
+  const r = i.repo || i.repository || '';
+  const n = i.number ?? i.id;
+  const label = o && r ? `${o}/${r}#${n}` : (o ? `${o}#${n}` : `#${n}`);
+  const href = o && r && n != null ? repoUrl(o, r, ['issues', String(n)]) : '';
+  return html`<li class="repo-item">
+    ${href
+      ? html`<a href=${href}><strong>${label}</strong> ${i.title || ''}</a>`
+      : html`<strong>${label}</strong> ${i.title || ''}`}
+    <span class="badge">${i.state || 'open'}</span>
+    ${i.tag ? html`<span class="tiny-note" style="margin-left:.25rem">tag: <strong>${i.tag}</strong></span>` : nothing}
+  </li>`;
+}
+function boardSourceFields(st) {
+  return html`
+    <p class="tiny-note">Optional source filters (org + optional repo). Leave empty to include issues from any organization the API returns.</p>
+    ${(st.sources || []).map((s, i) => html`<div style="display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap;margin:.35rem 0">
+      <label style="flex:1;min-width:8rem">Org
+        <input type="text" .value=${s.org} @input=${(e) => { s.org = e.target.value; }} placeholder="any-org" />
+      </label>
+      <label style="flex:1;min-width:8rem">Repo <span class="tiny-note">optional</span>
+        <input type="text" .value=${s.repo} @input=${(e) => { s.repo = e.target.value; }} placeholder="any repo" />
+      </label>
+      <button class="btn" type="button" @click=${() => { st.sources.splice(i, 1); draw(); }}>Remove</button>
+    </div>`)}
+    <button class="btn" type="button" @click=${() => { st.sources.push({ org: '', repo: '' }); draw(); }}>Add source</button>
+  `;
+}
+function boardCreateFields(st, { nameId }) {
+  return html`
+    <label for=${nameId}>Name</label>
+    <input id=${nameId} type="text" .value=${st.name} @input=${(e) => { st.name = e.target.value; }} required />
+    <label for="${nameId}-tag">Tag <span class="tiny-note">optional</span></label>
+    <input id="${nameId}-tag" type="text" placeholder="ui, infra, urgent" .value=${st.tag} @input=${(e) => { st.tag = e.target.value; }} />
+    <label for="${nameId}-state">State <span class="tiny-note">optional</span></label>
+    <select id="${nameId}-state" .value=${st.state} @change=${(e) => { st.state = e.target.value; }}>
+      <option value="" ?selected=${!st.state}>—</option>
+      ${['open', 'closed', 'all'].map((s) => html`<option value=${s} ?selected=${st.state === s}>${s}</option>`)}
+    </select>
+    ${boardSourceFields(st)}
+  `;
+}
+async function loadVisibleOrgNames() {
+  const names = [];
+  const seen = new Set();
+  const add = (id) => {
+    const n = String(id || '').trim();
+    if (!n || seen.has(n)) return;
+    seen.add(n);
+    names.push(n);
+  };
+  const fromList = (list) => {
+    for (const o of list || []) add(typeof o === 'string' ? o : o?.id || o?.name);
+  };
+  if (getAuth()?.token) {
+    let me = getMe();
+    if (!me) me = await refreshMe();
+    add(meName() || getAuth()?.username);
+    fromList(me?.orgs);
   }
+  try {
+    const d = await api('/v1/orgs');
+    fromList(Array.isArray(d) ? d : d?.orgs || []);
+  } catch { /* keep username/me orgs */ }
+  return names;
+}
+async function fetchOrgBoards(org) {
+  return tryGet(`/v1/orgs/${encodeURIComponent(org)}/boards`, { boards: [] }, { auth: !!getAuth()?.token });
+}
+
+const OrgBoardsView = (org) => {
+  const st = { boards: null, err: '', formErr: '', busy: false, name: '', tag: '', state: '', sources: [] };
   async function onCreate(e) {
     e.preventDefault();
     if (st.busy) return;
     st.formErr = ''; st.busy = true; draw();
     try {
-      const name = String(st.name || '').trim();
-      const org = String(st.orgSel || '').trim();
-      const repo = String(st.repoSel || '').trim();
-      const tag = String(st.tag || '').trim();
-      if (!name) throw new Error('name is required');
-      if (!org || !repo) throw new Error('select an org and repo');
-      const body = { name, org, repo };
-      if (tag) body.tag = tag;
-      const data = await api('/v1/boards', { method: 'POST', auth: true, body });
-      const id = data?.id || data?.number || data?.name || '';
+      const body = boardCreateBody(st);
+      const data = await api(`/v1/orgs/${encodeURIComponent(org)}/boards`, { method: 'POST', auth: true, body });
+      const id = boardKey(data) || data?.board && boardKey(data.board);
       if (!id) throw new Error('board create did not return an id');
-      navigate(`/#/boards/${encodeURIComponent(id)}`);
+      navigate(boardUrl(org, id));
     } catch (err) { st.formErr = err.message || String(err); st.busy = false; draw(); }
   }
   return {
-    view: () => html`<div class="page"><div class="container">
-      <h1>Boards</h1>
-      ${getAuth() ? html`<form class="card form" style="max-width:34rem;margin:0 0 1.25rem" @submit=${onCreate}>
-        <h2 style="margin-top:0">New board</h2>
-        <label for="bd-name">Name</label>
-        <input id="bd-name" type="text" .value=${st.name} @input=${(e) => { st.name = e.target.value; }} required />
-        <div style="display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap">
-          <label style="flex:1;min-width:10rem">Org
-            <select .value=${st.orgSel} @change=${(e) => { st.orgSel = e.target.value; st.repoSel=''; loadReposFor(st.orgSel); }}>
-              <option value="">—</option>
-              ${(st.orgs || []).map((o) => html`<option value=${o} ?selected=${o === st.orgSel}>${o}</option>`)}
-            </select>
-          </label>
-          <label style="flex:1;min-width:10rem">Repo
-            <select .value=${st.repoSel} @change=${(e) => { st.repoSel = e.target.value; }}>
-              <option value="">—</option>
-              ${st.repos.map((r) => html`<option value=${r} ?selected=${r === st.repoSel}>${r}</option>`)}
-            </select>
-          </label>
-        </div>
-        <label for="bd-tag">Tag <span class="tiny-note">optional</span></label>
-        <input id="bd-tag" type="text" placeholder="ui, infra, urgent" .value=${st.tag} @input=${(e) => { st.tag = e.target.value; }} />
-        <div class="form-actions"><button class="btn btn-primary" type="submit" ?disabled=${st.busy}>${st.busy ? 'Creating…' : 'Create board'}</button></div>
-        ${st.formErr ? html`<p class="form-error">${st.formErr}</p>` : nothing}
-      </form>` : html`<p class="tiny-note"><a href="/#/login">Sign in</a> to create a board.</p>`}
-      ${!st.boards ? html`<p class="muted">${st.err || 'Loading boards…'}</p>`
-        : st.boards.live === false && (st.boards.status === 404 || st.boards.status === 405) ? html`<p class="muted">Boards are not available on this API yet.</p>`
-        : (Array.isArray(st.boards.data) ? st.boards.data : (st.boards.data?.boards || [])).length
-          ? html`<ul class="repo-list">${(Array.isArray(st.boards.data) ? st.boards.data : st.boards.data.boards).map((b) => {
-              const id = b.id || b.number || b.name;
-              return html`<li class="repo-item">
-                <a href=${`/#/boards/${encodeURIComponent(id)}`}><strong>${b.name || id}</strong></a>
-                <span class="tiny-note">${b.org}/${b.repo}${b.tag ? ` · tag: ${b.tag}` : ''}</span>
-              </li>`;
-            })}</ul>`
-          : html`<p class="muted">No boards yet.</p>`}
-    </div></div>`,
+    view: () => {
+      const list = boardsFrom(st.boards?.data);
+      return html`<div class="page"><div class="container">
+        <p class="tiny-note"><a href="/#/boards">All boards</a> · <a href=${orgUrl(org)}>${org}</a></p>
+        <h1>Boards · ${org}</h1>
+        <p class="tiny-note">This organization owns the board. Matching issues may come from any org.</p>
+        ${getAuth() ? html`<form class="card form" style="max-width:34rem;margin:0 0 1.25rem" @submit=${onCreate}>
+          <h2 style="margin-top:0">New board</h2>
+          <p class="tiny-note">Owner: <strong>${org}</strong></p>
+          ${boardCreateFields(st, { nameId: 'obd-name' })}
+          <div class="form-actions"><button class="btn btn-primary" type="submit" ?disabled=${st.busy}>${st.busy ? 'Creating…' : 'Create board'}</button></div>
+          ${st.formErr ? html`<p class="form-error">${st.formErr}</p>` : nothing}
+        </form>` : html`<p class="tiny-note"><a href="/#/login">Sign in</a> to create a board.</p>`}
+        ${!st.boards ? html`<p class="muted">${st.err || 'Loading boards…'}</p>`
+          : apiUnavailable(st.boards) ? html`<p class="muted">Boards are not available on this API yet.</p>`
+          : list.length
+            ? html`<ul class="repo-list">${list.map((b) => {
+                const id = boardKey(b);
+                const owner = b.org || org;
+                return html`<li class="repo-item">
+                  <a href=${boardUrl(owner, id)}><strong>${b.name || id}</strong></a>
+                  <span class="tiny-note">${owner}${b.tag ? ` · tag: ${b.tag}` : ''}${b.state ? ` · ${b.state}` : ''}</span>
+                </li>`;
+              })}</ul>`
+            : html`<p class="muted">No boards yet.</p>`}
+      </div></div>`;
+    },
     load: async (rerender) => {
       try {
-        const d = await tryGet('/v1/boards', { boards: [] }, { auth: true });
-        st.boards = d;
-      } catch { st.boards = { live: false, status: 404, data: { boards: [] } }; }
-      try {
-        const o = await api('/v1/orgs');
-        const list = Array.isArray(o) ? o : (o?.orgs || []);
-        st.orgs = list.map((x) => (typeof x === 'string' ? x : x.name));
-      } catch { st.orgs = []; }
+        st.boards = await fetchOrgBoards(org);
+      } catch {
+        st.boards = { live: false, status: 404, data: { boards: [] } };
+      }
       rerender();
     },
   };
 };
 
-const BoardView = (id) => {
+const BoardView = (org, id) => {
   const st = { s: null, err: '', delBusy: false, delErr: '' };
   async function onDelete() {
     if (st.delBusy) return;
     if (!confirm('Delete this board?')) return;
     st.delErr = ''; st.delBusy = true; draw();
     try {
-      await api(`/v1/boards/${encodeURIComponent(id)}`, { method: 'DELETE', auth: true });
-      navigate('/#/boards');
+      await api(`/v1/orgs/${encodeURIComponent(org)}/boards/${encodeURIComponent(id)}`, { method: 'DELETE', auth: true });
+      navigate(boardsUrl(org));
     } catch (e) {
       st.delErr = e.message || String(e);
       st.delBusy = false; draw();
@@ -1801,35 +1908,110 @@ const BoardView = (id) => {
   }
   return {
     view: () => {
-      const d = st.s?.data || {};
-      const issues = Array.isArray(st.s?.data) ? st.s?.data : (d.issues || []);
-      const head = d.name ? `${d.name}` : `Board ${id}`;
+      const raw = st.s?.data;
+      const { board, issues } = unwrapBoardGet(Array.isArray(raw) ? { issues: raw } : raw);
+      const owner = board.org || org;
+      const head = board.name || `Board ${id}`;
       return html`<div class="page"><div class="container">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap;">
           <h1 style="margin:.2rem 0">${head}</h1>
           <div>
+            <a class="btn" href=${boardsUrl(owner)}>Org boards</a>
             <a class="btn" href="/#/boards">All boards</a>
             <button class="btn" type="button" ?disabled=${st.delBusy} @click=${onDelete}>${st.delBusy ? 'Deleting…' : 'Delete board'}</button>
           </div>
         </div>
-        ${d.org && d.repo ? html`<p class="tiny-note">${d.org}/${d.repo}${d.tag ? ` · tag: ${d.tag}` : ''}</p>` : nothing}
+        ${boardMetaNote(board, owner)}
         ${!st.s ? html`<p class="muted">${st.err || 'Loading board…'}</p>`
-          : st.s.live === false && (st.s.status === 404 || st.s.status === 405) ? html`<p class="muted">Boards are not available on this API yet.</p>`
-          : issues.length ? html`<ul class="repo-list">${issues
-              .filter((i) => (i.state || 'open') === 'open')
-              .map((i) => html`<li class="repo-item">
-                <a href=${repoUrl(i.org || d.org, i.repo || d.repo, ['issues', String(i.number)])}><strong>#${i.number}</strong> ${i.title}</a>
-                <span class="badge">${i.state || 'open'}</span>
-                ${i.tag ? html`<span class="tiny-note" style="margin-left:.25rem">tag: <strong>${i.tag}</strong></span>` : nothing}
-              </li>`)}</ul>` : html`<p class="muted">No matching open issues.</p>`}
+          : apiUnavailable(st.s) ? html`<p class="muted">Boards are not available on this API yet.</p>`
+          : issues.length ? html`<ul class="repo-list">${issues.map((i) => boardIssueRow(i, owner))}</ul>`
+            : html`<p class="muted">No matching issues.</p>`}
         ${st.delErr ? html`<p class="form-error">${st.delErr}</p>` : nothing}
       </div></div>`;
     },
     load: async (rerender) => {
       try {
-        const d = await tryGet(`/v1/boards/${encodeURIComponent(id)}`, { issues: [] }, { auth: true });
-        st.s = d;
+        st.s = await tryGet(
+          `/v1/orgs/${encodeURIComponent(org)}/boards/${encodeURIComponent(id)}`,
+          { issues: [] },
+          { auth: !!getAuth()?.token },
+        );
       } catch (e) { st.err = e.message || String(e); st.s = null; }
+      rerender();
+    },
+  };
+};
+
+const BoardsView = () => {
+  const st = { groups: null, err: '', formErr: '', busy: false, orgs: [], orgSel: '', name: '', tag: '', state: '', sources: [] };
+  async function onCreate(e) {
+    e.preventDefault();
+    if (st.busy) return;
+    st.formErr = ''; st.busy = true; draw();
+    try {
+      const org = String(st.orgSel || '').trim();
+      if (!org) throw new Error('select an owner organization');
+      const body = boardCreateBody(st);
+      const data = await api(`/v1/orgs/${encodeURIComponent(org)}/boards`, { method: 'POST', auth: true, body });
+      const id = boardKey(data) || data?.board && boardKey(data.board);
+      if (!id) throw new Error('board create did not return an id');
+      navigate(boardUrl(org, id));
+    } catch (err) { st.formErr = err.message || String(err); st.busy = false; draw(); }
+  }
+  return {
+    view: () => {
+      const groups = st.groups || [];
+      const missing = groups.length ? groups.every((g) => apiUnavailable(g.result)) : false;
+      const rows = [];
+      for (const g of groups) {
+        if (apiUnavailable(g.result)) continue;
+        for (const b of boardsFrom(g.result.data)) rows.push({ org: b.org || g.org, board: b });
+      }
+      const ownerOrgs = ownerChoices().map((o) => o.id);
+      const orgOpts = ownerOrgs.length ? ownerOrgs : st.orgs;
+      return html`<div class="page"><div class="container">
+        <h1>Boards</h1>
+        <p class="tiny-note">Boards are owned by an organization. Pick an org you belong to to create one; a board can still list issues from any org.</p>
+        ${getAuth() ? html`<form class="card form" style="max-width:34rem;margin:0 0 1.25rem" @submit=${onCreate}>
+          <h2 style="margin-top:0">New board</h2>
+          <label for="bd-org">Owner organization</label>
+          <select id="bd-org" .value=${st.orgSel} @change=${(e) => { st.orgSel = e.target.value; }}>
+            <option value="">—</option>
+            ${orgOpts.map((o) => html`<option value=${o} ?selected=${o === st.orgSel}>${o}</option>`)}
+          </select>
+          ${st.orgSel ? html`<p class="tiny-note">Or open <a href=${boardsUrl(st.orgSel)}>${st.orgSel} boards</a>.</p>` : nothing}
+          ${boardCreateFields(st, { nameId: 'bd-name' })}
+          <div class="form-actions"><button class="btn btn-primary" type="submit" ?disabled=${st.busy}>${st.busy ? 'Creating…' : 'Create board'}</button></div>
+          ${st.formErr ? html`<p class="form-error">${st.formErr}</p>` : nothing}
+        </form>` : html`<p class="tiny-note"><a href="/#/login">Sign in</a> to create a board.</p>`}
+        ${st.orgs.length ? html`<p class="tiny-note">Organizations: ${st.orgs.map((o, i) => html`${i ? ' · ' : nothing}<a href=${boardsUrl(o)}>${o}</a>`)}</p>` : nothing}
+        ${!st.groups ? html`<p class="muted">${st.err || 'Loading boards…'}</p>`
+          : missing ? html`<p class="muted">Boards are not available on this API yet.</p>`
+          : rows.length
+            ? html`<ul class="repo-list">${rows.map(({ org, board: b }) => {
+                const id = boardKey(b);
+                return html`<li class="repo-item">
+                  <a href=${boardUrl(org, id)}><strong>${b.name || id}</strong></a>
+                  <span class="tiny-note">${org}${b.tag ? ` · tag: ${b.tag}` : ''}${b.state ? ` · ${b.state}` : ''}</span>
+                </li>`;
+              })}</ul>`
+            : html`<p class="muted">${st.orgs.length ? 'No boards yet.' : 'Pick an organization to view its boards.'}</p>`}
+      </div></div>`;
+    },
+    load: async (rerender) => {
+      if (getAuth()?.token && !getMe()) await refreshMe();
+      const orgs = await loadVisibleOrgNames();
+      st.orgs = orgs;
+      const mine = ownerChoices().map((o) => o.id);
+      if (!st.orgSel && mine.length) st.orgSel = mine[0];
+      else if (!st.orgSel && orgs.length) st.orgSel = orgs[0];
+      if (!orgs.length) {
+        st.groups = [];
+        rerender();
+        return;
+      }
+      const groups = await Promise.all(orgs.map(async (o) => ({ org: o, result: await fetchOrgBoards(o) })));
+      st.groups = groups;
       rerender();
     },
   };
@@ -1906,6 +2088,11 @@ const RepoView = (org, repo, opts) => {
     issueEditBody: '',
     issueEditTag: '',
     issueEditBusy: false,
+    issueComments: null,
+    issueConvDraft: '',
+    issueConvBusy: false,
+    issueCommentErr: '',
+    issueCommentEditing: null,
     // Fork
     forkBusy: false,
     forkErr: '',
@@ -3101,7 +3288,13 @@ const RepoView = (org, repo, opts) => {
       const d = it.data || {};
       const state = String(d.state || 'open');
       const open = state === 'open';
-      const canToggle = isViewerOwner();
+      const isAuthor = meIsAuthor(d);
+      const canEditIssue = isAuthor;
+      const canToggle = isAuthor || isViewerOwner();
+      const commentsPath = `/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/issues/${encodeURIComponent(st.issueNo)}/comments`;
+      const reloadIssueComments = async () => {
+        st.issueComments = await tryGet(commentsPath, { comments: [] }, { auth: true });
+      };
       const toggle = async () => {
         if (!canToggle || st.issueBusy) return;
         st.issueErr = ''; st.issueBusy = true; draw();
@@ -3112,6 +3305,74 @@ const RepoView = (org, repo, opts) => {
         } catch (e) { st.issueErr = e.message || String(e); }
         st.issueBusy = false; draw();
       };
+      const comments = asNamedList(st.issueComments?.data, 'comments');
+      const commentsMissing = apiUnavailable(st.issueComments);
+      const signedIn = !!getAuth()?.token;
+      const submitIssueComment = async (e) => {
+        e.preventDefault();
+        const body = String(st.issueConvDraft || '').trim();
+        if (!body || st.issueConvBusy) return;
+        st.issueCommentErr = ''; st.issueConvBusy = true; draw();
+        try {
+          await api(commentsPath, { method: 'POST', auth: true, body: { body } });
+          st.issueConvDraft = '';
+          await reloadIssueComments();
+          st.issueConvBusy = false; draw();
+        } catch (err) {
+          st.issueCommentErr = err.message || String(err);
+          st.issueConvBusy = false; draw();
+        }
+      };
+      const saveIssueComment = async (e, c) => {
+        e.preventDefault();
+        if (!c?.id || st.issueCommentEditing?.busy) return;
+        const body = String(st.issueCommentEditing.body || '').trim();
+        if (!body) return;
+        st.issueCommentErr = '';
+        st.issueCommentEditing = { ...st.issueCommentEditing, busy: true };
+        draw();
+        try {
+          await api(`${commentsPath}/${encodeURIComponent(c.id)}`, { method: 'PATCH', auth: true, body: { body } });
+          st.issueCommentEditing = null;
+          await reloadIssueComments();
+          draw();
+        } catch (err) {
+          st.issueCommentErr = err.message || String(err);
+          st.issueCommentEditing = { ...st.issueCommentEditing, busy: false };
+          draw();
+        }
+      };
+      const deleteIssueComment = async (c) => {
+        if (!c?.id) return;
+        st.issueCommentErr = '';
+        try {
+          await api(`${commentsPath}/${encodeURIComponent(c.id)}`, { method: 'DELETE', auth: true });
+          await reloadIssueComments();
+          draw();
+        } catch (err) {
+          st.issueCommentErr = err.message || String(err);
+          draw();
+        }
+      };
+      const issueCommentBlock = (c) => {
+        const mine = commentIsMine(c);
+        const editing = st.issueCommentEditing && String(st.issueCommentEditing.id) === String(c.id);
+        return html`<div class="pr-comment">
+          <div class="pr-comment-meta">
+            <strong>${userLink(c.author || c.user || c.author_name)}</strong>
+            <span class="tiny-note">${fmtTime(c.created_at)}</span>
+            ${mine && c.id && !editing ? html`<button class="btn btn-ghost btn-tiny" type="button" @click=${() => { st.issueCommentEditing = { id: c.id, body: c.body || '', busy: false }; draw(); }}>Edit</button>` : nothing}
+            ${mine && c.id ? html`<button class="btn btn-ghost btn-tiny" type="button" @click=${() => deleteIssueComment(c)}>Delete</button>` : nothing}
+          </div>
+          ${editing ? html`<form class="form" @submit=${(e) => saveIssueComment(e, c)}>
+            <textarea rows="4" .value=${st.issueCommentEditing.body} @input=${(e) => { if (st.issueCommentEditing) st.issueCommentEditing.body = e.target.value; }}></textarea>
+            <div class="form-actions">
+              <button class="btn btn-primary" type="submit" ?disabled=${st.issueCommentEditing.busy}>${st.issueCommentEditing.busy ? 'Saving…' : 'Save'}</button>
+              <button class="btn" type="button" @click=${() => { st.issueCommentEditing = null; draw(); }}>Cancel</button>
+            </div>
+          </form>` : html`<div class="pr-comment-body">${c.body || ''}</div>`}
+        </div>`;
+      };
       return html`<div class="pr-detail">
         <p><a href=${repoUrl(org, repo, ['issues'])}>← Issues</a></p>
         <div class="card pr-title-box">
@@ -3119,7 +3380,7 @@ const RepoView = (org, repo, opts) => {
             ${st.issueEditing ? html`
               <form class="form" @submit=${async (e) => {
                 e.preventDefault();
-                if (st.issueEditBusy) return;
+                if (!canEditIssue || st.issueEditBusy) return;
                 st.issueErr = ''; st.issueEditBusy = true; draw();
                 try {
                   const body = {
@@ -3146,7 +3407,7 @@ const RepoView = (org, repo, opts) => {
               </form>
             ` : html`
               <h2>#${d.number ?? st.issueNo} ${d.title || ''}</h2>
-              ${canToggle ? html`<button class="btn" type="button" @click=${() => { st.issueEditing = true; st.issueEditTitle = d.title || ''; st.issueEditBody = d.body || ''; st.issueEditTag = d.tag || ''; draw(); }}>Edit</button>` : nothing}
+              ${canEditIssue ? html`<button class="btn" type="button" @click=${() => { st.issueEditing = true; st.issueEditTitle = d.title || ''; st.issueEditBody = d.body || ''; st.issueEditTag = d.tag || ''; draw(); }}>Edit</button>` : nothing}
             `}
           </div>
           <div class="pr-meta-row">
@@ -3161,6 +3422,19 @@ const RepoView = (org, repo, opts) => {
           </div>
           ${st.issueErr ? html`<p class="form-error">${st.issueErr}</p>` : nothing}
         </div>
+        <section class="pr-comments" aria-label="Comments">
+          <h3>Comments</h3>
+          ${!st.issueComments ? html`<p class="muted">Loading comments…</p>`
+            : commentsMissing ? html`<p class="muted">Comments are not available on this API yet.</p>`
+            : comments.length ? comments.map(issueCommentBlock)
+              : html`<p class="muted">No comments yet.</p>`}
+          ${commentsMissing ? nothing : signedIn ? html`<form class="card form pr-add-comment" @submit=${submitIssueComment}>
+            <label for="is-conv-body">Add comment</label>
+            <textarea id="is-conv-body" rows="4" @input=${(e) => { st.issueConvDraft = e.target.value; }} .value=${st.issueConvDraft}></textarea>
+            <div class="form-actions"><button class="btn btn-primary" type="submit" ?disabled=${st.issueConvBusy || !(st.issueConvDraft || '').trim()}>${st.issueConvBusy ? 'Posting…' : 'Comment'}</button></div>
+          </form>` : html`<p class="tiny-note"><a href=${`/#/login?next=${encodeURIComponent(location.pathname + location.hash)}`}>Sign in to comment</a></p>`}
+          ${st.issueCommentErr ? html`<p class="form-error">${st.issueCommentErr}</p>` : nothing}
+        </section>
       </div>`;
     }
     const list = Array.isArray(st.issues?.data) ? st.issues?.data : st.issues?.data?.issues || [];
@@ -3287,8 +3561,10 @@ const RepoView = (org, repo, opts) => {
         return;
       }
       if (st.tab === 'issues') {
+        if (authed) refreshMe();
         if (st.issueNo) {
           tryGet(`${b}/issues/${encodeURIComponent(st.issueNo)}`, null, { auth: authed }).then((s) => { st.issue = s; rerender(); });
+          tryGet(`${b}/issues/${encodeURIComponent(st.issueNo)}/comments`, { comments: [] }, { auth: authed }).then((s) => { st.issueComments = s; rerender(); });
         } else {
           const t = parseLocation().query.get('tag') || '';
           const path = t ? `${b}/issues?tag=${encodeURIComponent(t)}` : `${b}/issues`;
@@ -3505,11 +3781,17 @@ function drawChrome() {
       items.push(sep());
       items.push(html`<a href=${userUrl(parts[1])}>${parts[1]}</a>`);
     }
-  } else if (parts[0] === 'orgs' || parts[0] === 'login' || parts[0] === 'new' || parts[0] === 'getting-started' || parts[0] === 'cli' || parts[0] === 'ci') {
-    const label = { orgs: 'orgs', login: 'sign in', new: 'new repository', 'getting-started': 'getting started', cli: 'download CLI', ci: 'CI' }[parts[0]];
+  } else if (parts[0] === 'orgs' || parts[0] === 'login' || parts[0] === 'new' || parts[0] === 'getting-started' || parts[0] === 'cli' || parts[0] === 'ci' || parts[0] === 'boards') {
+    const label = { orgs: 'orgs', login: 'sign in', new: 'new repository', 'getting-started': 'getting started', cli: 'download CLI', ci: 'CI', boards: 'boards' }[parts[0]];
     items.push(html`<span>${label}</span>`);
   } else if (parts.length >= 1) {
     const [org, repo, kind, ref, ...rest] = parts;
+    if (repo === 'boards') {
+      items.push(html`<a href=${orgUrl(org)}>${org}</a>`);
+      items.push(sep());
+      items.push(html`<a href=${boardsUrl(org)}>boards</a>`);
+      if (kind) { items.push(sep()); items.push(html`<span>${kind}</span>`); }
+    } else {
     items.push(html`<a href=${orgUrl(org)}>${org}</a>`);
     if (repo) { items.push(sep()); items.push(html`<a href=${repoUrl(org, repo)}><strong>${repo}</strong></a>`); }
     if (repo && kind === 'pulls') {
@@ -3535,6 +3817,7 @@ function drawChrome() {
         items.push(sep());
         items.push(last && kind === 'blob' ? html`<span>${seg}</span>` : html`<a href=${treeUrl(org, repo, ref || 'main', sub)}>${seg}</a>`);
       });
+    }
     }
   }
   render(items.length ? html`<span class="sep">/</span>${items}` : nothing, el);
@@ -3585,12 +3868,9 @@ function routeFromParts(parts) {
   if (parts.length === 1 && parts[0] === 'getting-started') return { view: GettingStarted, title: 'Getting started — ScionBase' };
   if ((parts.length === 1 && parts[0] === 'ci') || (parts[0] === 'docs' && parts[1] === 'ci')) return { view: CiDocs, title: 'CI on ScionBase' };
   if (parts.length === 1 && parts[0] === 'cli') return { view: CliView, title: 'Download the CLI — ScionBase' };
-  // Boards routes (from main)
+  // Boards discovery (org-owned boards live under /#/orgs/:org/boards)
   if (parts.length >= 1 && parts[0] === 'boards') {
-    const id = parts[1] || null;
-    return id
-      ? Object.assign(BoardView(id), { title: `Board ${id} — ScionBase` })
-      : Object.assign(BoardsView(), { title: 'Boards — ScionBase' });
+    return Object.assign(BoardsView(), { title: 'Boards — ScionBase' });
   }
   // Verified products page
   if (parts.length === 1 && (parts[0] === 'verified-products' || parts[0] === 'filecoin-verified-products')) {
@@ -3598,6 +3878,13 @@ function routeFromParts(parts) {
   }
   if (parts[0] === 'orgs') {
     if (parts.length === 1) return Object.assign(OrgsView(), { title: 'Organizations — ScionBase' });
+    if (parts[2] === 'boards') {
+      const org = parts[1];
+      const id = parts[3] || null;
+      return id
+        ? Object.assign(BoardView(org, id), { title: `${org} / ${id} — ScionBase` })
+        : Object.assign(OrgBoardsView(org), { title: `${org} boards — ScionBase` });
+    }
     // /#/orgs/:orgName → same as /#/:orgName (do not treat "orgs" as the org).
     return routeFromParts(parts.slice(1));
   }
