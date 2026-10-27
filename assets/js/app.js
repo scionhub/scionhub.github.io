@@ -150,6 +150,14 @@ async function tryGet(path, fallback, opts = {}) {
   try { return { data: await api(path, opts), live: true }; }
   catch (e) { return { data: fallback, live: false, error: String(e.message || e), status: e.status }; }
 }
+
+/** True when GET /v1/repos/:org/:repo says the repo does not exist (not merely unreachable). */
+function isRepoNotFound(result) {
+  if (!result || result.live) return false;
+  if (result.status === 404) return true;
+  const err = String(result.error || '').toLowerCase();
+  return err === 'not found' || err === 'notfound';
+}
 const srcTag = () => nothing;
 
 const pre = (lines) => html`<pre><code>${(Array.isArray(lines) ? lines : [lines]).join('\n')}</code></pre>`;
@@ -2715,6 +2723,16 @@ const RepoView = (org, repo, opts) => {
     <p class="tiny-note"><a href="/#/getting-started">Full getting-started guide</a> · <a href="/#/ci">CI on ScionBase</a></p>`;
 
   const view = () => {
+    if (!st.info) {
+      return html`<div class="page"><div class="container"><p class="muted">Loading repository…</p></div></div>`;
+    }
+    if (isRepoNotFound(st.info)) {
+      return html`<div class="page"><div class="container">
+        <h1>Repository not found</h1>
+        <p>The repository <strong>${full}</strong> does not exist.</p>
+        <p><a href=${orgUrl(org)}>View repositories in ${org}</a> · <a href="/#/">Back home</a></p>
+      </div></div>`;
+    }
     const { parts } = parseLocation();
     const showRepoTabs = parts.length === 2; // only when breadcrumbs end at the repo
     return html`<div class="page"><div class="container">
@@ -2862,7 +2880,12 @@ const RepoView = (org, repo, opts) => {
     load: async (rerender) => {
       const b = `/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}`;
       const authed = !!getAuth()?.token;
-      tryGet(b, { org, name: repo, visibility: 'public' }, { auth: authed }).then((s) => { st.info = s; rerender(); });
+      // Never invent repo metadata on 404. A missing repo must not look real
+      // and then fail later with a confusing "ref … not found" tree error.
+      const info = await tryGet(b, null, { auth: authed });
+      st.info = info;
+      rerender();
+      if (isRepoNotFound(info)) return;
       tryGet(`${b}/owners`, { owners: [] }, { auth: authed }).then((s) => { st.owners = s; rerender(); });
       if (authed) refreshMe();
       tryGet(`${b}/branches`, { branches: [{ name: 'main', target: '' }] }).then((s) => {
