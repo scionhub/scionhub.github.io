@@ -3023,7 +3023,7 @@ const RepoView = (org, repo, opts) => {
           try {
             const blob = await loadBlob(org, repo, st.ref, rpath);
             const text = blob.bytes && isLikelyText(blob.bytes, readmeEnt.name) ? decodeUtf8(blob.bytes) : '';
-            const md = /\.md$/i.test(readmeEnt.name);
+            const md = isMarkdownName(readmeEnt.name);
             let template = null;
             let images = [];
             if (md && text) {
