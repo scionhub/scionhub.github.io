@@ -1625,9 +1625,7 @@ const UserView = (name) => {
       const self = isSelf();
       const publicTagline = extractTagline(st.profile?.live ? st.profile.data : null);
       const repos = st.repos;
-      return html`<div class="page-head"><div class="container"><div class="subnav">
-        ${self && getAuth() ? html`<a class="btn btn-primary" href="/#/new">New repository</a>` : nothing}
-      </div></div></div>
+      return html`<div class="page-head"><div class="container"><div class="subnav"></div></div></div>
       <div class="page"><div class="container layout-2col">
         <aside class="sidebar"><div class="card">
           <div style="display:flex;align-items:center;gap:.75rem;">
@@ -2932,19 +2930,23 @@ const RepoView = (org, repo, opts) => {
           ${st.prTab === 'files' ? html`<div class="pr-code-checks">${checksSection(true)}</div>${filesPane(d)}` : conversationPane(d)}
         </div>`;
     }
-    const rows = pullList(st.pulls);
+    let rows = pullList(st.pulls);
+    rows = rows.slice().sort((a, b) => {
+      const sa = pullStatusLabel(a) === 'open' ? 0 : 1;
+      const sb = pullStatusLabel(b) === 'open' ? 0 : 1;
+      if (sa !== sb) return sa - sb;
+      const na = Number(a.number || a.id || 0);
+      const nb = Number(b.number || b.id || 0);
+      return nb - na;
+    });
     return html`
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap;">
-        <h2 style="margin:.2rem 0">Pull requests</h2>
-        ${getAuth()?.token ? html`<a class="btn btn-primary" href=${repoUrl(org, repo, ['pulls', 'new'])}>New pull request</a>` : nothing}
-      </div>
       ${!st.pulls ? html`<p class="muted">Loading…</p>`
         : !st.pulls.live ? html`<p class="muted">Couldn't load pull requests (${st.pulls.error}). Try <code>scn pr list</code>.</p>`
         : rows.length ? html`<ul class="repo-list">${rows.map((p) => html`<li class="repo-item pr-item" @click=${(e) => {
             if (e.target.closest('a')) return;
             navigate(repoUrl(org, repo, ['pulls', String(p.number)]));
           }}>
-            <a class="pr-title" href=${repoUrl(org, repo, ['pulls', String(p.number)])}><strong>${p.title || `#${p.number}`}</strong></a>
+            <a class="pr-title" href=${repoUrl(org, repo, ['pulls', String(p.number)])}><strong>${(`#${p.number} ${p.title || ''}`).trim()}</strong></a>
             <span class="pr-author">${userLink(pullAuthorName(p))}</span>
             <span class="badge pr-state">${pullStatusLabel(p)}</span>
           </li>`)}</ul>`
@@ -3799,7 +3801,8 @@ function drawChrome() {
     if (repo) { items.push(sep()); items.push(html`<a href=${repoUrl(org, repo)}><strong>${repo}</strong></a>`); }
     if (repo && kind === 'pulls') {
       items.push(sep());
-      items.push(html`<a href=${repoUrl(org, repo, ['pulls'])}>pulls</a>`);
+      const isList = !ref;
+      items.push(html`<span><a href=${repoUrl(org, repo, ['pulls'])}>pulls</a>${isList && getAuth()?.token ? html` <a class="btn btn-primary btn-tiny" style="margin-left:.4rem" href=${repoUrl(org, repo, ['pulls', 'new'])}>New</a>` : nothing}</span>`);
       if (ref) {
         items.push(sep());
         const isNum = /^\d+$/.test(ref || '');
@@ -3954,7 +3957,7 @@ function drawNav() {
   if (!el) return;
   const a = getAuth();
   const inner = a
-    ? html`<a class="btn btn-primary" href="/#/new">New</a><a class="nav-user" href=${userUrl(meName() || a.username)}>${meName() || a.username}</a><button class="btn btn-ghost" type="button" @click=${() => { setAuth(null); if (location.hash.startsWith('#/new') || location.hash.startsWith('#/login') || location.hash.startsWith('#/u/')) navigate('/#/'); else draw(); }}>Log out</button>`
+    ? html`<a class="nav-user" href=${userUrl(meName() || a.username)}>${meName() || a.username}</a><button class="btn btn-ghost" type="button" @click=${() => { setAuth(null); if (location.hash.startsWith('#/new') || location.hash.startsWith('#/login') || location.hash.startsWith('#/u/')) navigate('/#/'); else draw(); }}>Log out</button>`
     : html`<a class="btn btn-ghost" href="/#/login">Sign in</a>`;
   render(inner, el);
 }
