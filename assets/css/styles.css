@@ -31,12 +31,19 @@
   }
 }
 * { box-sizing: border-box; }
-html, body { height: 100%; }
+/* Solid canvas fill so the top glow cannot tile as the page scrolls. */
+html {
+  background-color: var(--bg);
+}
+html, body { min-height: 100%; }
 body {
   margin: 0;
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial, "Apple Color Emoji","Segoe UI Emoji";
   color: var(--text);
-  background: radial-gradient(1200px 600px at 70% -10%, rgba(39,199,159,0.25), transparent 60%) , var(--bg);
+  background-color: var(--bg);
+  background-image: radial-gradient(1200px 600px at 70% -10%, rgba(39,199,159,0.25), transparent 60%);
+  background-repeat: no-repeat;
+  background-position: top center;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -143,9 +150,10 @@ ul { padding-left: 1.2rem; }
 /* Hero */
 .hero {
   padding: 4.5rem 0 3.5rem;
-  background:
+  background-image:
     radial-gradient(900px 420px at 10% -10%, rgba(180,246,230,0.16), transparent 60%),
     radial-gradient(600px 320px at 90% 0%, rgba(39,199,159,0.18), transparent 60%);
+  background-repeat: no-repeat;
 }
 .hero-inner { display: grid; grid-template-columns: 1.2fr 1fr; gap: 2rem; align-items: center; }
 .hero h1 { font-size: clamp(1.8rem, 2.8vw + 1rem, 3rem); margin-bottom: .75rem; }
