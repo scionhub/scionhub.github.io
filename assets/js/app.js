@@ -3537,7 +3537,9 @@ function drawChrome() {
       });
     }
   }
-  render(items.length ? html`<span class="sep">/</span>${items}` : nothing, el);
+  // Avoid implying that certain top-level pages (like Sign in) are nested under "Orgs".
+  const addLeadingSep = !(parts[0] === 'login');
+  render(items.length ? html`${addLeadingSep ? html`<span class="sep">/</span>` : nothing}${items}` : nothing, el);
 }
 
 const NotFound = () => html`<div class="page"><div class="container"><h1>Not found</h1><p><a href="/">Back home</a></p></div></div>`;
