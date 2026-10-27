@@ -2764,7 +2764,7 @@ const RepoView = (org, repo, opts) => {
                   };
                   const tag = String(st.issueEditTag || '').trim();
                   if (tag) body.tag = tag; else body.tag = '';
-                  const data = await api(\`/v1/repos/\${encodeURIComponent(org)}/\${encodeURIComponent(repo)}/issues/\${encodeURIComponent(st.issueNo)}\`, { method: 'PATCH', auth: true, body });
+                  const data = await api(`/v1/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/issues/${encodeURIComponent(st.issueNo)}`, { method: 'PATCH', auth: true, body });
                   st.issue = { live: true, data };
                   st.issueEditing = false; st.issueEditBusy = false; draw();
                 } catch (e3) { st.issueErr = e3.message || String(e3); st.issueEditBusy = false; draw(); }
