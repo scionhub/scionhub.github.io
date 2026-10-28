@@ -1374,7 +1374,7 @@ const GettingStarted = () => html`
     ${pre(['scn clone filecoin-project/lotus --path src'])}
     <p class="tiny-note"><strong>Exclude a folder</strong>: full-tree clone has no per-folder exclude yet — use <code>--path</code> to check out only what you need.</p>
     <h2 id="branch">5. Branch</h2>
-    ${pre(['scn branch', 'scn branch new my-feature --from main', 'scn branch switch my-feature', 'scn branch delete old-feature'])}
+    ${pre(['scn branch', 'scn branch new my-feature --from main', 'scn branch switch my-feature', 'scn branch delete old-feature', '# edit files, then:', 'scn commit -m "describe the change"', 'scn push', '# or:', 'scn push -m "describe the change"'])}
     <h2 id="pull">6. Pull, merge, push</h2>
     <p><code>scn pull</code> fetches the current branch. <code>scn merge &lt;ref&gt;</code> three‑way merges; both‑changed paths get git‑style markers. To publish changes, run <code>scn commit -m "…"</code> then <code>scn push</code> — or after edits use <code>scn push -m "…"</code> to commit+publish in one step.</p>
     ${pre(['scn pull', 'scn merge main', '# edit files', 'scn commit -m "describe the change"', 'scn push', '# or:', 'scn push -m "describe the change"'])}
@@ -2404,6 +2404,11 @@ const RepoView = (org, repo, opts) => {
       `scn branch new my-feature --from ${st.ref}`,
       'scn branch switch my-feature',
       'scn branch delete old-feature',
+      '# edit files, then:',
+      'scn commit -m "describe the change"',
+      'scn push',
+      '# or:',
+      'scn push -m "describe the change"',
     ],
     Pull: ['scn pull'],
     Merge: [
