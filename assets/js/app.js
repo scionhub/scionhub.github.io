@@ -95,6 +95,11 @@ function isOrgMember(org) {
   const role = orgRole(org);
   return role === 'member' || role === 'admin' || role === 'owner' || role === 'write';
 }
+function canManageOrgPeople(org) {
+  const role = orgRole(org);
+  if (role === 'owner' || role === 'admin') return true;
+  return !!getMe()?.user?.admin;
+}
 function ownerChoices() {
   const auth = getAuth();
   const me = getMe();
@@ -169,6 +174,7 @@ function hashUrl(parts) {
   return '/#/' + encodeSegs(parts);
 }
 function orgUrl(org) { return hashUrl([org]); }
+function peopleUrl(org) { return orgUrl(org) + '#people'; }
 function repoUrl(org, repo, extra = []) { return hashUrl([org, repo, ...extra]); }
 function treeUrl(org, repo, ref, path = '') {
   const segs = [org, repo, 'tree', ref];
@@ -1525,10 +1531,152 @@ const NewRepoView = () => {
 };
 
 const OrgView = (org) => {
-  const st = { s: null };
+  const st = {
+    s: null,
+    members: null,
+    invitations: null,
+    inviteUser: '',
+    inviteRole: 'member',
+    inviteBusy: false,
+    inviteErr: '',
+    inviteOk: '',
+    cancelBusy: '',
+    cancelErr: '',
+  };
+
+  async function reloadPeople() {
+    if (!getAuth()?.token) {
+      st.members = null;
+      st.invitations = null;
+      return;
+    }
+    st.members = await tryGet(`/v1/orgs/${encodeURIComponent(org)}/members`, { members: [] }, { auth: true });
+    // Owners/admins get a live list; 403 means this viewer cannot manage invitations.
+    st.invitations = await tryGet(`/v1/orgs/${encodeURIComponent(org)}/invitations`, { invitations: [] }, { auth: true });
+  }
+
+  async function onInvite(e) {
+    e.preventDefault();
+    const username = (st.inviteUser || '').trim();
+    if (!username || st.inviteBusy) return;
+    st.inviteErr = '';
+    st.inviteOk = '';
+    st.inviteBusy = true;
+    draw();
+    try {
+      if (!USER_RE.test(username)) throw new Error('username must match ^[a-z0-9][a-z0-9-]{2,31}$');
+      const role = st.inviteRole === 'owner' ? 'owner' : 'member';
+      await api(`/v1/orgs/${encodeURIComponent(org)}/invitations`, {
+        method: 'POST',
+        auth: true,
+        body: { username, role },
+      });
+      st.inviteUser = '';
+      st.inviteOk = `Invited ${username}.`;
+      await reloadPeople();
+    } catch (err) {
+      st.inviteErr = err.message || String(err);
+    }
+    st.inviteBusy = false;
+    draw();
+  }
+
+  async function onCancelInvite(id) {
+    if (!id || st.cancelBusy) return;
+    st.cancelErr = '';
+    st.cancelBusy = id;
+    draw();
+    try {
+      await api(`/v1/orgs/${encodeURIComponent(org)}/invitations/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        auth: true,
+      });
+      await reloadPeople();
+    } catch (err) {
+      st.cancelErr = err.message || String(err);
+    }
+    st.cancelBusy = '';
+    draw();
+  }
+
+  const peoplePanel = () => {
+    const authed = !!getAuth()?.token;
+    const members = asNamedList(st.members?.data, 'members');
+    const pending = asNamedList(st.invitations?.data, 'invitations')
+      .filter((i) => String(i.state || 'pending').toLowerCase() === 'pending');
+    const canInvite = authed && (
+      st.invitations?.live === true
+      || (st.invitations == null && canManageOrgPeople(org))
+    );
+    return html`<section id="people" class="people-panel" aria-label="People">
+      <h3>People</h3>
+      ${!authed
+        ? html`<p class="tiny-note"><a href=${`/#/login?next=${encodeURIComponent(location.pathname + location.hash)}`}>Sign in</a> to see members and invitations.</p>`
+        : !st.members ? html`<p class="muted">Loading members…</p>`
+        : st.members.live === false
+          ? html`<p class="muted">${st.members.status === 401 || st.members.status === 403
+            ? 'Members are visible to people in this organization.'
+            : `Could not load members (${st.members.error}).`}</p>`
+          : members.length
+            ? html`<ul class="owner-list">${members.map((m) => {
+                const name = personName(m) || String(m.user || '').trim();
+                const role = String(m.role || (m.can_write ? 'member' : '') || 'member');
+                return html`<li>
+                  <span><strong>${userLink(name)}</strong>
+                    <span class="badge people-role">${role}</span>
+                    ${m.created_at ? html`<span class="tiny-note">joined ${fmtTime(m.created_at)}</span>` : nothing}
+                  </span>
+                </li>`;
+              })}</ul>`
+            : html`<p class="muted">No members listed.</p>`}
+      ${canInvite ? html`
+        <form class="form owner-add" @submit=${onInvite}>
+          <label for="org-invite-user">Invite by username
+            <input id="org-invite-user" type="text" autocomplete="username" placeholder="username"
+              pattern="[a-z0-9][a-z0-9-]{2,31}" .value=${st.inviteUser}
+              @input=${(e) => { st.inviteUser = e.target.value; st.inviteOk = ''; draw(); }} />
+          </label>
+          <label for="org-invite-role">Role
+            <select id="org-invite-role" .value=${st.inviteRole}
+              @change=${(e) => { st.inviteRole = e.target.value; draw(); }}>
+              <option value="member" ?selected=${st.inviteRole === 'member'}>member</option>
+              <option value="owner" ?selected=${st.inviteRole === 'owner'}>owner</option>
+            </select>
+          </label>
+          <button class="btn btn-primary" type="submit" ?disabled=${st.inviteBusy || !(st.inviteUser || '').trim()}>${st.inviteBusy ? 'Inviting…' : 'Invite'}</button>
+        </form>
+        ${st.inviteErr ? html`<p class="form-error">${st.inviteErr}</p>` : nothing}
+        ${st.inviteOk ? html`<p class="form-ok">${st.inviteOk}</p>` : nothing}
+        <h3 class="people-invites-head">Pending invitations</h3>
+        ${!st.invitations ? html`<p class="muted">Loading invitations…</p>`
+          : st.invitations.live === false
+            ? html`<p class="muted">${st.invitations.status === 401 || st.invitations.status === 403
+              ? 'Only owners can manage invitations.'
+              : `Could not load invitations (${st.invitations.error}).`}</p>`
+            : pending.length
+              ? html`<ul class="owner-list">${pending.map((inv) => {
+                  const name = personName(inv) || String(inv.username || '').trim();
+                  const id = inv.id;
+                  return html`<li>
+                    <span><strong>${userLink(name)}</strong>
+                      <span class="badge">${inv.role || 'member'}</span>
+                      ${inv.invited_by ? html`<span class="tiny-note">invited by ${userLink(inv.invited_by, inv.invited_by)}</span>` : nothing}
+                    </span>
+                    <button class="btn btn-ghost btn-tiny" type="button"
+                      ?disabled=${!!st.cancelBusy}
+                      @click=${() => onCancelInvite(id)}>${st.cancelBusy === id ? 'Cancelling…' : 'Cancel'}</button>
+                  </li>`;
+                })}</ul>`
+              : html`<p class="muted">No pending invitations.</p>`}
+        ${st.cancelErr ? html`<p class="form-error">${st.cancelErr}</p>` : nothing}
+      ` : nothing}
+    </section>`;
+  };
+
   const view = (s) => html`
     <div class="page-head"><div class="container"><div class="subnav">
             ${getAuth() ? html`<a class="btn btn-primary" href="/#/new">New repository</a>` : nothing}
+            <a class="btn" href=${peopleUrl(org)}>People</a>
             <a class="btn" href=${boardsUrl(org)}>Boards</a>
     </div></div></div>
     <div class="page"><div class="container layout-2col">
@@ -1544,12 +1692,16 @@ const OrgView = (org) => {
           : s.data.length ? s.data.map((r) => html`<li class="repo-item"><a href=${repoUrl(org, r)}><strong>${org}/${r}</strong></a><span class="badge">public</span></li>`)
           : html`<li class="repo-item"><span class="muted">No repositories yet.</span></li>`}</ul>
         <p class="tiny-note">Have code to bring? <a href="/#/getting-started">Clone and push with <code>scn</code></a>. Organization boards: <a href=${boardsUrl(org)}>view boards</a>.</p>
+        ${peoplePanel()}
       </section>
     </div></div>`;
   return { view: () => view(st.s), load: async (rerender) => {
+    if (getAuth()?.token && !getMe()) await refreshMe();
     st.s = await tryGet(`/v1/orgs/${encodeURIComponent(org)}/repos`, FALLBACK.repos[org] || []);
     if (st.s.live && !Array.isArray(st.s.data)) st.s.data = st.s.data.repos || [];
     st.s.data = st.s.data.map((r) => (typeof r === 'string' ? r : r.name));
+    rerender();
+    await reloadPeople();
     rerender();
   } };
 };

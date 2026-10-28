@@ -179,6 +179,11 @@
 .owner-list li { display:flex; align-items:center; justify-content:space-between; gap:.75rem; padding:.45rem 0; border-bottom:1px solid var(--border); }
 .owner-add { display:flex; flex-wrap:wrap; gap:.5rem; align-items:flex-end; margin:.5rem 0 1.25rem; }
 .owner-add label { display:flex; flex-direction:column; gap:.25rem; flex:1; min-width:12rem; }
+.people-panel { margin-top: 1.75rem; }
+.people-panel h3 { margin-bottom: .45rem; }
+.people-panel .owner-list .badge { margin-left: .45rem; font-size: .72rem; text-transform: capitalize; }
+.people-panel .owner-list .tiny-note { margin-left: .45rem; }
+.people-invites-head { margin-top: 1.25rem; }
 .danger-zone {
   margin:2rem 0 1rem; padding:1rem 1.1rem; border:1px solid #f85149; border-radius:.6rem;
   background: color-mix(in oklab, #f85149 8%, transparent);
